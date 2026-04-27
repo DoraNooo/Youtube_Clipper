@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>YouTube Clipper</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      background: #0f0f11;
+      font-family: 'Inter', system-ui, sans-serif;
+      color: #e2e2e2;
+      padding: 32px 16px 64px;
+    }
+
+    .card {
+      width: 100%;
+      max-width: 660px;
+      background: #1a1a1f;
+      border: 1px solid #2a2a32;
+      border-radius: 20px;
+      padding: 36px 32px;
+      box-shadow: 0 24px 80px rgba(0,0,0,.6);
+    }
+
+    /* ── Logo ───────────────────────────────────────── */
+    .logo { display: flex; align-items: center; gap: 12px; margin-bottom: 28px; }
+    .logo-icon {
+      width: 44px; height: 44px;
+      background: linear-gradient(135deg, #ff4e4e, #cc0000);
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center; font-size: 20px;
+    }
+    .logo h1 { font-size: 1.4rem; font-weight: 700; letter-spacing: -.5px; }
+    .logo span { color: #ff4e4e; }
+
+    /* ── Form elements ──────────────────────────────── */
+    label {
+      display: block;
+      font-size: .72rem; font-weight: 600;
+      letter-spacing: .06em; text-transform: uppercase;
+      color: #666; margin-bottom: 6px;
+    }
+
+    input[type="text"] {
+      width: 100%;
+      background: #111114;
+      border: 1px solid #2a2a32;
+      border-radius: 10px;
+      padding: 11px 14px;
+      font-size: .92rem; color: #e2e2e2;
+      outline: none; transition: border-color .2s;
+      margin-bottom: 16px;
+    }
+    input[type="text"]:focus { border-color: #ff4e4e; }
+    input[type="text"]::placeholder { color: #333; }
+
+    /* ── Player ─────────────────────────────────────── */
+    #playerSection {
+      display: none;
+      margin-bottom: 6px;
+    }
+
+    #ytPlayerWrap {
+      position: relative;
+      padding-bottom: 56.25%;
+      height: 0;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #0a0a0c;
+      margin-bottom: 14px;
+    }
+
+    #ytPlayer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0; }
+
+    #playerOverlay {
+      position: absolute; inset: 0; z-index: 10;
+      display: flex; align-items: center; justify-content: center;
+      background: #0a0a0c;
+      border-radius: 12px;
+    }
+    .spin {
+      width: 34px; height: 34px;
+      border: 3px solid #222; border-top-color: #ff4e4e;
+      border-radius: 50%; animation: spin .7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Timeline ───────────────────────────────────── */
+    #timelineSection { margin-bottom: 14px; }
+
+    #tlLabels {
+      display: flex; justify-content: space-between;
+      font-size: .72rem; color: #555;
+      padding: 0 2px; margin-bottom: 6px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    #tlOuter { position: relative; height: 36px; margin: 0 2px; }
+
+    #tlTrack {
+      position: absolute;
+      top: 50%; left: 0; right: 0; height: 5px;
+      transform: translateY(-50%);
+      background: #222; border-radius: 3px;
+      pointer-events: none;
+    }
+
+    #tlRange {
+      position: absolute; top: 0; height: 100%;
+      background: linear-gradient(90deg, #cc2200, #ff4e4e);
+      border-radius: 3px;
+    }
+
+    #tlPlayhead {
+      position: absolute;
+      top: -8px; bottom: -8px; width: 2px;
+      background: rgba(255,255,255,.85);
+      border-radius: 2px;
+      pointer-events: none;
+      transform: translateX(-50%);
+      display: none;
+      transition: left .15s linear;
+    }
+
+    .tslider {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 36px; margin: 0; padding: 0;
+      background: transparent; pointer-events: none;
+      appearance: none; -webkit-appearance: none; outline: none;
+    }
+    .tslider::-webkit-slider-runnable-track { background: transparent; height: 36px; }
+    .tslider::-webkit-slider-thumb {
+      pointer-events: all; -webkit-appearance: none;
+      width: 20px; height: 20px; border-radius: 50%;
+      background: #fff; border: 2.5px solid #ff4e4e;
+      cursor: ew-resize; box-shadow: 0 2px 8px rgba(0,0,0,.55);
+      margin-top: 8px;
+      transition: transform .1s;
+    }
+    .tslider::-webkit-slider-thumb:hover,
+    .tslider:active::-webkit-slider-thumb { transform: scale(1.18); }
+    .tslider::-moz-range-track { background: transparent; }
+    .tslider::-moz-range-thumb {
+      pointer-events: all; width: 20px; height: 20px;
+      border-radius: 50%; background: #fff;
+      border: 2.5px solid #ff4e4e; cursor: ew-resize;
+      box-shadow: 0 2px 8px rgba(0,0,0,.55);
+    }
+
+    /* ── Timecodes ──────────────────────────────────── */
+    .timecodes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .timecodes input[type="text"] { margin-bottom: 0; }
+
+    .hint { font-size: .72rem; color: #444; margin-top: 6px; margin-bottom: 22px; }
+
+    /* Preview button */
+    #previewBtn {
+      display: block;
+      margin: 10px auto 0;
+      padding: 7px 20px;
+      background: transparent;
+      border: 1px solid #3a3a50;
+      border-radius: 8px;
+      color: #aaa;
+      font-size: .8rem;
+      font-weight: 600;
+      letter-spacing: .04em;
+      cursor: pointer;
+      transition: background .15s, border-color .15s, color .15s;
+    }
+    #previewBtn:hover { background: #1e1e28; border-color: #ff4e4e; color: #ff4e4e; }
+
+    .fin-chip {
+      background: #1e1e28; border: 1px solid #3a3a50;
+      border-radius: 6px; color: #7a8fff;
+      font-size: .65rem; font-weight: 600; letter-spacing: .04em;
+      padding: 2px 7px; cursor: pointer;
+      transition: background .15s, border-color .15s; text-transform: uppercase;
+    }
+    .fin-chip:hover { background: #25253a; border-color: #5a5aff; }
+
+    /* ── Generate button ────────────────────────────── */
+    #clipBtn {
+      width: 100%; padding: 13px;
+      background: linear-gradient(135deg, #ff4e4e, #cc0000);
+      border: none; border-radius: 12px;
+      font-size: .95rem; font-weight: 700; color: #fff;
+      cursor: pointer; transition: opacity .2s, transform .1s;
+    }
+    #clipBtn:hover:not(:disabled) { opacity: .88; transform: translateY(-1px); }
+    #clipBtn:disabled { opacity: .45; cursor: not-allowed; }
+
+    /* ── Progress ───────────────────────────────────── */
+    #progressSection { display: none; margin-top: 24px; }
+
+    .phases { display: flex; align-items: center; margin-bottom: 16px; }
+    .phase-item { display: flex; flex-direction: column; align-items: center; gap: 5px; flex-shrink: 0; }
+    .phase-dot {
+      width: 26px; height: 26px; border-radius: 50%;
+      background: #222; border: 2px solid #333;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; transition: all .4s;
+    }
+    .phase-label { font-size: .68rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: #444; transition: color .4s; }
+    .phase-connector { flex: 1; height: 2px; background: #222; margin: 0 4px 18px; border-radius: 2px; transition: background .4s; }
+
+    .phase-item.active .phase-dot { border-color: #4a9eff; background: rgba(74,158,255,.12); animation: pulse-blue .9s ease-in-out infinite alternate; }
+    .phase-item.active .phase-label { color: #4a9eff; }
+    .phase-item.done .phase-dot { background: #1a5a30; border-color: #2ecc71; color: #2ecc71; }
+    .phase-item.done .phase-label { color: #2ecc71; }
+    .phase-connector.done { background: #2ecc71; }
+    .phase-connector.active { background: #4a9eff; }
+    @keyframes pulse-blue { from { box-shadow: 0 0 0 0 rgba(74,158,255,.4); } to { box-shadow: 0 0 0 6px rgba(74,158,255,0); } }
+
+    #statusText { font-size: .87rem; color: #888; margin-bottom: 12px; }
+
+    #barWrap {
+      display: none; background: #111114; border: 1px solid #222;
+      border-radius: 10px; overflow: hidden; height: 34px; position: relative;
+    }
+    #barFill { height: 100%; width: 0%; background: linear-gradient(90deg, #1a5a7a, #4a9eff); transition: width .4s; border-radius: 10px; }
+    #barLabel { position: absolute; inset: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; font-size: .8rem; font-weight: 600; color: #ddd; pointer-events: none; }
+    #barStats { color: #aaa; font-size: .75rem; }
+
+    /* ── Error ──────────────────────────────────────── */
+    #errorBox {
+      display: none; background: #1f0e0e; border: 1px solid #5a1a1a;
+      border-radius: 12px; padding: 14px 16px; margin-top: 18px;
+      font-size: .85rem; color: #ff6b6b; line-height: 1.5;
+    }
+
+    /* ── Filename + download ────────────────────────── */
+    #filenameWrap { display: none; margin-top: 16px; }
+    .filename-row {
+      display: flex; align-items: center;
+      background: #111114; border: 1px solid #2a2a32;
+      border-radius: 10px; overflow: hidden; transition: border-color .2s;
+    }
+    .filename-row:focus-within { border-color: #2ecc71; }
+    #filenameInput {
+      flex: 1; background: transparent; border: none;
+      padding: 0 12px; height: 40px;
+      font-size: .88rem; color: #e2e2e2; outline: none;
+    }
+    .filename-ext {
+      padding: 0 12px; font-size: .86rem; color: #555;
+      background: #1a1a1f; border-left: 1px solid #2a2a32;
+      height: 40px; display: flex; align-items: center;
+      flex-shrink: 0; user-select: none;
+    }
+
+    #downloadBtn {
+      display: none; width: 100%; margin-top: 14px; padding: 13px;
+      background: linear-gradient(135deg, #2ecc71, #1a8a4a);
+      border: none; border-radius: 12px;
+      font-size: .93rem; font-weight: 700; color: #fff;
+      cursor: pointer; transition: opacity .2s;
+    }
+    #downloadBtn:hover { opacity: .88; }
+  </style>
+</head>
+<body>
+<div class="card">
+
+  <!-- Logo -->
+  <div class="logo">
+    <div class="logo-icon">✂️</div>
+    <h1>YouTube <span>Clipper</span></h1>
+  </div>
+
+  <!-- URL -->
+  <label for="urlInput">Lien YouTube</label>
+  <input type="text" id="urlInput" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off" />
+
+  <!-- Player + timeline (affiché après chargement) -->
+  <div id="playerSection">
+    <div id="ytPlayerWrap">
+      <div id="ytPlayer"></div>
+      <div id="playerOverlay"><div class="spin"></div></div>
+    </div>
+
+    <div id="timelineSection">
+      <div id="tlLabels">
+        <span id="lblStart">0:00</span>
+        <span id="lblEnd">0:00</span>
+      </div>
+      <div id="tlOuter">
+        <div id="tlTrack">
+          <div id="tlRange"></div>
+          <div id="tlPlayhead"></div>
+        </div>
+        <input type="range" id="slStart" class="tslider" min="0" max="100" value="0" step="1" />
+        <input type="range" id="slEnd"   class="tslider" min="0" max="100" value="100" step="1" />
+      </div>
+      <button type="button" id="previewBtn" onclick="previewClip()">▶ Aperçu du clip</button>
+    </div>
+  </div>
+
+  <!-- Timecodes -->
+  <div class="timecodes" style="margin-bottom:0">
+    <div>
+      <label for="startInput">Début</label>
+      <input type="text" id="startInput" placeholder="0:30 ou 1:02:15" />
+    </div>
+    <div>
+      <label for="endInput" style="display:flex;align-items:center;justify-content:space-between;">
+        Fin
+        <button type="button" class="fin-chip" onclick="setEndToFin()">jusqu'à la fin</button>
+      </label>
+      <input type="text" id="endInput" placeholder="1:45 ou « fin »" />
+    </div>
+  </div>
+  <p class="hint" id="mainHint">Format : MM:SS, HH:MM:SS ou secondes — clip max 10 min.</p>
+
+  <button id="clipBtn" onclick="startClip()">Générer le clip</button>
+
+  <!-- Progress -->
+  <div id="progressSection">
+    <div class="phases">
+      <div class="phase-item" id="ph1"><div class="phase-dot" id="dot1"></div><span class="phase-label">Analyse</span></div>
+      <div class="phase-connector" id="con1"></div>
+      <div class="phase-item" id="ph2"><div class="phase-dot" id="dot2"></div><span class="phase-label">Encodage</span></div>
+      <div class="phase-connector" id="con2"></div>
+      <div class="phase-item" id="ph3"><div class="phase-dot" id="dot3"></div><span class="phase-label">Prêt</span></div>
+    </div>
+    <div id="statusText">Initialisation…</div>
+    <div id="barWrap">
+      <div id="barFill"></div>
+      <div id="barLabel"><span id="barPct">0%</span><span id="barStats"></span></div>
+    </div>
+  </div>
+
+  <div id="errorBox"></div>
+
+  <div id="filenameWrap">
+    <label for="filenameInput">Nom du fichier</label>
+    <div class="filename-row">
+      <input type="text" id="filenameInput" placeholder="nom_du_clip" spellcheck="false" />
+      <span class="filename-ext">.mp4</span>
+    </div>
+  </div>
+
+  <button id="downloadBtn" onclick="downloadClip()">⬇ Télécharger le clip</button>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════
+// YouTube IFrame API
+// ═══════════════════════════════════════════════════════════
+let ytReady = false;
+let ytLoading = false;
+let player = null;
+let videoDuration = 0;
+let playheadTimer = null;
+let lastVideoId = null;
+
+function loadYouTubeAPI() {
+  if (ytLoading || ytReady) return;
+  ytLoading = true;
+  const s = document.createElement('script');
+  s.src = 'https://www.youtube.com/iframe_api';
+  document.head.appendChild(s);
+}
+
+window.onYouTubeIframeAPIReady = function() { ytReady = true; };
+
+// ═══════════════════════════════════════════════════════════
+// URL → charger le player
+// ═══════════════════════════════════════════════════════════
+let urlTimer = null;
+document.getElementById('urlInput').addEventListener('input', function() {
+  clearTimeout(urlTimer);
+  urlTimer = setTimeout(() => tryLoadVideo(this.value.trim()), 900);
+});
+
+function extractVideoId(url) {
+  const m = url.match(/(?:youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+
+function tryLoadVideo(url) {
+  const videoId = extractVideoId(url);
+  if (!videoId || videoId === lastVideoId) return;
+  lastVideoId = videoId;
+
+  // Afficher la section player avec le loader
+  const ps = document.getElementById('playerSection');
+  ps.style.display = 'block';
+  document.getElementById('playerOverlay').style.display = 'flex';
+  document.getElementById('tlPlayhead').style.display = 'none';
+  document.getElementById('mainHint').textContent = 'Glissez les curseurs ou tapez les timecodes — clip max 10 min.';
+
+  loadYouTubeAPI();
+  waitAndCreate(videoId);
+}
+
+function waitAndCreate(videoId) {
+  if (!ytReady) { setTimeout(() => waitAndCreate(videoId), 100); return; }
+
+  if (player) {
+    player.loadVideoById(videoId);
+    player.pauseVideo();
+    return;
+  }
+
+  player = new YT.Player('ytPlayer', {
+    videoId,
+    playerVars: { autoplay: 0, controls: 1, rel: 0, modestbranding: 1 },
+    events: {
+      onReady(e) {
+        document.getElementById('playerOverlay').style.display = 'none';
+        const dur = e.target.getDuration();
+        if (dur > 0) setupTimeline(dur);
+        e.target.pauseVideo();
+      },
+      onStateChange(e) {
+        // setupTimeline ne doit être appelé qu'une seule fois (initialisation)
+        // — jamais depuis onStateChange pour éviter de réinitialiser les curseurs
+        if (videoDuration === 0) {
+          const dur = player.getDuration();
+          if (dur > 0) setupTimeline(dur);
+        }
+        // Sync bouton aperçu avec l'état natif du player
+        if (e.data === 1) updatePreviewBtn(true);            // PLAYING
+        if (e.data === 2 || e.data === 0) updatePreviewBtn(false); // PAUSED / ENDED
+      },
+      onError() {
+        document.getElementById('playerOverlay').innerHTML =
+          '<span style="color:#555;font-size:.82rem;text-align:center;padding:16px">Aperçu non disponible<br><span style="font-size:.72rem;color:#444">Les timecodes restent fonctionnels</span></span>';
+      }
+    }
+  });
+}
+
+// ═══════════════════════════════════════════════════════════
+// Timeline
+// ═══════════════════════════════════════════════════════════
+function setupTimeline(dur) {
+  videoDuration = dur;
+
+  const slS = document.getElementById('slStart');
+  const slE = document.getElementById('slEnd');
+
+  // Toujours step=1 (secondes entières) — évite les comportements de snap inattendus
+  slS.max = dur; slS.step = 1; slS.value = 0;
+  slE.max = dur; slE.step = 1; slE.value = dur;
+
+  // slEnd toujours au-dessus (z-index fixe) ; slStart passe devant
+  // uniquement quand on l'attrape (géré via CSS :active implicite)
+  slS.style.zIndex = 3;
+  slE.style.zIndex = 4;
+
+  document.getElementById('startInput').value = fmtTime(0);
+  document.getElementById('endInput').value   = fmtTime(dur);
+
+  document.getElementById('timelineSection').style.display = 'block';
+  updateTimelineUI();
+
+  if (playheadTimer) clearInterval(playheadTimer);
+  document.getElementById('tlPlayhead').style.display = 'block';
+  // 100 ms pour une réactivité suffisante sur la contrainte de borne de fin
+  playheadTimer = setInterval(updatePlayhead, 100);
+}
+
+function updateTimelineUI() {
+  const slS = document.getElementById('slStart');
+  const slE = document.getElementById('slEnd');
+  const s   = parseFloat(slS.value);
+  const e   = parseFloat(slE.value);
+  const dur = videoDuration || 1;
+
+  document.getElementById('tlRange').style.left  = (s / dur * 100) + '%';
+  document.getElementById('tlRange').style.width = ((e - s) / dur * 100) + '%';
+  document.getElementById('lblStart').textContent = fmtTime(s);
+  document.getElementById('lblEnd').textContent   = fmtTime(e);
+}
+
+function updatePlayhead() {
+  if (!player || typeof player.getCurrentTime !== 'function') return;
+  try {
+    const t   = player.getCurrentTime();
+    const pct = videoDuration > 0 ? (t / videoDuration) * 100 : 0;
+    document.getElementById('tlPlayhead').style.left = pct + '%';
+
+    // Contraindre la lecture entre les bornes start et end
+    const state = player.getPlayerState();
+    const isPlaying = (state === 1 || state === 3); // PLAYING ou BUFFERING
+    if (isPlaying) {
+      const s = parseFloat(slStart.value);
+      const e = parseFloat(slEnd.value);
+      if (t >= e - 0.15) {
+        // Borne de fin atteinte : revenir au début et boucler
+        player.seekTo(s, true);
+      } else if (t < s - 0.5) {
+        // Si on se retrouve avant la borne start (ex: seek externe), ramener
+        player.seekTo(s, true);
+      }
+    }
+  } catch (_) {}
+}
+
+function previewClip() {
+  if (!player || typeof player.seekTo !== 'function' || !videoDuration) return;
+  try {
+    const s = parseFloat(slStart.value);
+    player.seekTo(s, true);
+    player.playVideo();
+    updatePreviewBtn(true);
+  } catch (_) {}
+}
+
+function updatePreviewBtn(playing) {
+  const btn = document.getElementById('previewBtn');
+  if (!btn) return;
+  btn.textContent = playing ? '⏸ Pause' : '▶ Aperçu du clip';
+  btn.onclick = playing
+    ? () => { try { player.pauseVideo(); updatePreviewBtn(false); } catch(_){} }
+    : () => previewClip();
+}
+
+// ── Sliders : input = visuel seulement, change = seek au relâchement ──────
+const slStart = document.getElementById('slStart');
+const slEnd   = document.getElementById('slEnd');
+
+// Pendant le drag, donner la priorité absolue au curseur actif pour éviter
+// que l'autre "vole" l'interaction quand ils se croisent (bug de réinitialisation).
+slStart.addEventListener('pointerdown', () => {
+  slStart.style.zIndex = 5;
+  slEnd.style.zIndex   = 3;
+});
+slEnd.addEventListener('pointerdown', () => {
+  slEnd.style.zIndex   = 5;
+  slStart.style.zIndex = 3;
+});
+document.addEventListener('pointerup', () => {
+  // Restaurer le z-index par défaut après relâchement
+  slStart.style.zIndex = 3;
+  slEnd.style.zIndex   = 4;
+});
+
+slStart.addEventListener('input', function() {
+  let s = parseFloat(this.value);
+  const e = parseFloat(slEnd.value);
+  if (s >= e) { s = Math.max(0, e - 1); this.value = s; }
+  document.getElementById('startInput').value = fmtTime(s);
+  updateTimelineUI();
+});
+
+slStart.addEventListener('change', function() {
+  seekPlayer(parseFloat(this.value));
+});
+
+slEnd.addEventListener('input', function() {
+  let e = parseFloat(this.value);
+  const s = parseFloat(slStart.value);
+  if (e <= s) { e = Math.min(videoDuration, s + 1); this.value = e; }
+  document.getElementById('endInput').value = fmtTime(e);
+  updateTimelineUI();
+});
+
+slEnd.addEventListener('change', function() {
+  seekPlayer(parseFloat(this.value));
+});
+
+// ── Inputs texte → sliders ────────────────────────────────────────────────
+function applyStartInput() {
+  if (!videoDuration) return;
+  try {
+    let s = parseTc(document.getElementById('startInput').value);
+    const e = parseFloat(slEnd.value);
+    s = Math.max(0, Math.min(s, e - 1, videoDuration));
+    slStart.value = s;
+    document.getElementById('startInput').value = fmtTime(s);
+    updateTimelineUI();
+    seekPlayer(s);
+  } catch (_) {}
+}
+
+function applyEndInput() {
+  if (!videoDuration) return;
+  const raw = document.getElementById('endInput').value.trim().toLowerCase();
+  if (raw === 'fin' || raw === 'end') {
+    slEnd.value = videoDuration;
+    updateTimelineUI();
+    return;
+  }
+  try {
+    let e = parseTc(document.getElementById('endInput').value);
+    const s = parseFloat(slStart.value);
+    e = Math.max(s + 1, Math.min(e, videoDuration));
+    slEnd.value = e;
+    document.getElementById('endInput').value = fmtTime(e);
+    updateTimelineUI();
+    seekPlayer(e);
+  } catch (_) {}
+}
+
+document.getElementById('startInput').addEventListener('change', applyStartInput);
+document.getElementById('startInput').addEventListener('keydown', e => { if (e.key === 'Enter') { applyStartInput(); e.target.blur(); } });
+
+document.getElementById('endInput').addEventListener('change', applyEndInput);
+document.getElementById('endInput').addEventListener('keydown', e => { if (e.key === 'Enter') { applyEndInput(); e.target.blur(); } });
+
+// Seek uniquement au relâchement du curseur — ne pas spammer l'API YT
+function seekPlayer(t) {
+  if (!player || typeof player.seekTo !== 'function') return;
+  try { player.seekTo(t, true); } catch (_) {}
+}
+
+function setEndToFin() {
+  document.getElementById('endInput').value = 'fin';
+  if (videoDuration > 0) {
+    slEnd.value = videoDuration;
+    updateTimelineUI();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Utilitaires temps
+// ═══════════════════════════════════════════════════════════
+function fmtTime(sec) {
+  sec = Math.round(sec);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (h > 0) return `${h}:${pad(m)}:${pad(s)}`;
+  return `${m}:${pad(s)}`;
+}
+
+function pad(n) { return String(n).padStart(2, '0'); }
+
+function parseTc(tc) {
+  tc = String(tc).trim();
+  const parts = tc.split(':');
+  if (parts.length === 3) return +parts[0] * 3600 + +parts[1] * 60 + parseFloat(parts[2]);
+  if (parts.length === 2) return +parts[0] * 60 + parseFloat(parts[1]);
+  return parseFloat(tc);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Génération du clip
+// ═══════════════════════════════════════════════════════════
+let currentJobId = null;
+let evtSource = null;
+
+function resetProgress() {
+  ['ph1','ph2','ph3'].forEach(id => { document.getElementById(id).className = 'phase-item'; });
+  ['con1','con2'].forEach(id => { document.getElementById(id).className = 'phase-connector'; });
+  ['dot1','dot2','dot3'].forEach(id => { document.getElementById(id).textContent = ''; });
+  document.getElementById('barWrap').style.display = 'none';
+  document.getElementById('barFill').style.width = '0%';
+  document.getElementById('barFill').style.background = 'linear-gradient(90deg, #1a5a7a, #4a9eff)';
+  document.getElementById('barPct').textContent = '0%';
+  document.getElementById('barStats').textContent = '';
+  document.getElementById('statusText').textContent = 'Initialisation…';
+  document.getElementById('errorBox').style.display = 'none';
+  document.getElementById('downloadBtn').style.display = 'none';
+  document.getElementById('filenameWrap').style.display = 'none';
+  document.getElementById('progressSection').style.display = 'block';
+}
+
+function setPhaseActive(n) {
+  for (let i = 1; i <= 3; i++) {
+    const ph = document.getElementById(`ph${i}`);
+    const dot = document.getElementById(`dot${i}`);
+    if (i < n)      { ph.className = 'phase-item done';   dot.textContent = '✓'; }
+    else if (i === n) { ph.className = 'phase-item active'; dot.textContent = ''; }
+    else             { ph.className = 'phase-item';         dot.textContent = ''; }
+    if (i <= 2) {
+      document.getElementById(`con${i}`).className =
+        'phase-connector' + (i < n ? ' done' : i === n ? ' active' : '');
+    }
+  }
+}
+
+function setAllDone() {
+  for (let i = 1; i <= 3; i++) {
+    document.getElementById(`ph${i}`).className = 'phase-item done';
+    document.getElementById(`dot${i}`).textContent = '✓';
+  }
+  document.getElementById('con1').className = 'phase-connector done';
+  document.getElementById('con2').className = 'phase-connector done';
+}
+
+function eta(elapsedS, pct, speed) {
+  if (!speed || pct <= 0 || pct >= 100) return '';
+  const sx = parseFloat(speed);
+  if (!sx) return '';
+  const rem = (elapsedS / (pct / 100)) - elapsedS;
+  const s = Math.round(rem / sx);
+  if (s <= 0) return '';
+  return s < 60 ? `ETA ~${s}s` : `ETA ~${Math.round(s/60)}min`;
+}
+
+function handleState(state) {
+  const { phase } = state;
+  if (phase === 'starting' || phase === 'extracting') {
+    setPhaseActive(1);
+    document.getElementById('statusText').textContent = 'Analyse de la vidéo YouTube…';
+
+  } else if (phase === 'encoding') {
+    setPhaseActive(2);
+    const pct = state.pct || 0;
+    document.getElementById('barWrap').style.display = 'block';
+    document.getElementById('barFill').style.width = pct + '%';
+    document.getElementById('barPct').textContent = pct + '%';
+    const parts = [];
+    if (state.speed) parts.push(`⚡ ${state.speed}`);
+    if (state.bitrate && state.bitrate !== 'N/A') parts.push(state.bitrate);
+    const e = eta(state.elapsed_s || 0, pct, state.speed);
+    if (e) parts.push(e);
+    document.getElementById('barStats').textContent = parts.join('  ·  ');
+    document.getElementById('statusText').textContent = 'Encodage du clip en cours…';
+
+  } else if (phase === 'done') {
+    setAllDone();
+    document.getElementById('barWrap').style.display = 'block';
+    document.getElementById('barFill').style.width = '100%';
+    document.getElementById('barFill').style.background = 'linear-gradient(90deg, #1a5a30, #2ecc71)';
+    document.getElementById('barPct').textContent = '100%';
+    document.getElementById('barStats').textContent = 'Terminé !';
+    document.getElementById('statusText').textContent = 'Clip prêt — choisissez un nom et téléchargez.';
+    if (state.video_title) document.getElementById('filenameInput').value = 'clip_' + state.video_title;
+    document.getElementById('filenameWrap').style.display = 'block';
+    document.getElementById('downloadBtn').style.display = 'block';
+    document.getElementById('clipBtn').disabled = false;
+    if (evtSource) { evtSource.close(); evtSource = null; }
+
+  } else if (phase === 'error') {
+    document.getElementById('progressSection').style.display = 'none';
+    document.getElementById('errorBox').style.display = 'block';
+    document.getElementById('errorBox').textContent = state.error || 'Une erreur est survenue.';
+    document.getElementById('clipBtn').disabled = false;
+    if (evtSource) { evtSource.close(); evtSource = null; }
+  }
+}
+
+async function startClip() {
+  const url   = document.getElementById('urlInput').value.trim();
+  const start = document.getElementById('startInput').value.trim();
+  const end   = document.getElementById('endInput').value.trim();
+  if (!url || !start || !end) { alert('Merci de renseigner l\'URL et les deux timecodes.'); return; }
+
+  if (evtSource) { evtSource.close(); evtSource = null; }
+  currentJobId = null;
+  document.getElementById('clipBtn').disabled = true;
+  resetProgress();
+
+  let data;
+  try {
+    const res = await fetch('/clip', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, start, end }),
+    });
+    data = await res.json();
+  } catch(e) {
+    document.getElementById('progressSection').style.display = 'none';
+    document.getElementById('errorBox').style.display = 'block';
+    document.getElementById('errorBox').textContent = 'Erreur réseau : ' + e.message;
+    document.getElementById('clipBtn').disabled = false;
+    return;
+  }
+
+  if (data.error) {
+    document.getElementById('progressSection').style.display = 'none';
+    document.getElementById('errorBox').style.display = 'block';
+    document.getElementById('errorBox').textContent = data.error;
+    document.getElementById('clipBtn').disabled = false;
+    return;
+  }
+
+  currentJobId = data.job_id;
+  evtSource = new EventSource(`/progress/${currentJobId}`);
+  evtSource.onmessage = e => handleState(JSON.parse(e.data));
+  evtSource.onerror = () => {
+    document.getElementById('errorBox').style.display = 'block';
+    document.getElementById('errorBox').textContent = 'Connexion perdue avec le serveur.';
+    document.getElementById('clipBtn').disabled = false;
+    evtSource.close(); evtSource = null;
+  };
+}
+
+function downloadClip() {
+  if (!currentJobId) return;
+  const rawName = document.getElementById('filenameInput').value.trim();
+  const qs = rawName ? `?filename=${encodeURIComponent(rawName)}` : '';
+  window.location.href = `/download/${currentJobId}${qs}`;
+  setTimeout(() => {
+    document.getElementById('downloadBtn').style.display = 'none';
+    document.getElementById('filenameWrap').style.display = 'none';
+    document.getElementById('progressSection').style.display = 'none';
+    currentJobId = null;
+  }, 1500);
+}
+</script>
+</body>
+</html>
