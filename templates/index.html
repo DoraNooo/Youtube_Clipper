@@ -177,6 +177,16 @@
     }
     #previewBtn:hover { background: #1e1e28; border-color: #ff4e4e; color: #ff4e4e; }
 
+    .mark-chip {
+      background: #1e1e28; border: 1px solid #3a3a50;
+      border-radius: 6px; color: #ff7a5a;
+      font-size: .65rem; font-weight: 600; letter-spacing: .04em;
+      padding: 2px 7px; cursor: pointer;
+      transition: background .15s, border-color .15s;
+      text-transform: uppercase;
+    }
+    .mark-chip:hover { background: #2a1a14; border-color: #ff4e4e; }
+
     .fin-chip {
       background: #1e1e28; border: 1px solid #3a3a50;
       border-radius: 6px; color: #7a8fff;
@@ -306,13 +316,19 @@
   <!-- Timecodes -->
   <div class="timecodes" style="margin-bottom:0">
     <div>
-      <label for="startInput">Début</label>
+      <label for="startInput" style="display:flex;align-items:center;justify-content:space-between;">
+        Début
+        <button type="button" class="mark-chip" onclick="markCurrent('start')" title="Utiliser la position actuelle de la vidéo">⬤ Position actuelle</button>
+      </label>
       <input type="text" id="startInput" placeholder="0:30 ou 1:02:15" />
     </div>
     <div>
       <label for="endInput" style="display:flex;align-items:center;justify-content:space-between;">
         Fin
-        <button type="button" class="fin-chip" onclick="setEndToFin()">jusqu'à la fin</button>
+        <span style="display:flex;gap:6px">
+          <button type="button" class="mark-chip" onclick="markCurrent('end')" title="Utiliser la position actuelle de la vidéo">⬤ Position actuelle</button>
+          <button type="button" class="fin-chip" onclick="setEndToFin()">jusqu'à la fin</button>
+        </span>
       </label>
       <input type="text" id="endInput" placeholder="1:45 ou « fin »" />
     </div>
@@ -612,6 +628,26 @@ document.getElementById('endInput').addEventListener('keydown', e => { if (e.key
 function seekPlayer(t) {
   if (!player || typeof player.seekTo !== 'function') return;
   try { player.seekTo(t, true); } catch (_) {}
+}
+
+function markCurrent(which) {
+  if (!player || typeof player.getCurrentTime !== 'function') return;
+  try {
+    const t = Math.round(player.getCurrentTime());
+    if (which === 'start') {
+      const e = parseFloat(slEnd.value);
+      const s = Math.min(t, e - 1);
+      slStart.value = s;
+      document.getElementById('startInput').value = fmtTime(s);
+      updateTimelineUI();
+    } else {
+      const s = parseFloat(slStart.value);
+      const e = Math.max(t, s + 1);
+      slEnd.value = Math.min(e, videoDuration);
+      document.getElementById('endInput').value = fmtTime(parseFloat(slEnd.value));
+      updateTimelineUI();
+    }
+  } catch (_) {}
 }
 
 function setEndToFin() {
