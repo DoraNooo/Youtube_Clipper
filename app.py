@@ -106,7 +106,8 @@ def run_clip_job(job_id: str, url: str, start_s: float, end_s: float | None, cli
     update_job(job_id, phase="extracting")
 
     ydl_opts = {
-        "format": "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        # Pas de contrainte d’extension : YouTube sert souvent du WebM ; ffmpeg ré-encode en H.264/AAC.
+        "format": "bv*[height<=1080]+ba/b[height<=1080]/b",
         "quiet": True,
         "no_warnings": True,
         **_yt_dlp_cookie_opts(),
