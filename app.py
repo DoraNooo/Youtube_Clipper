@@ -106,8 +106,16 @@ def run_clip_job(job_id: str, url: str, start_s: float, end_s: float | None, cli
     update_job(job_id, phase="extracting")
 
     ydl_opts = {
-        # Pas de contrainte d’extension : YouTube sert souvent du WebM ; ffmpeg ré-encode en H.264/AAC.
-        "format": "bv*[height<=1080]+ba/b[height<=1080]/b",
+        # Paysage ≤1080p OU portrait type Short (largeur ≤1080). Sinon fusion sans plafond puis meilleur flux unique.
+        # (height<=1080 seul exclut les Shorts 1080×1920.)
+        "format": (
+            "bestvideo[height<=1080]+bestaudio/"
+            "bestvideo[width<=1080]+bestaudio/"
+            "bestvideo+bestaudio/"
+            "best[height<=1080]/"
+            "best[width<=1080]/"
+            "best"
+        ),
         "quiet": True,
         "no_warnings": True,
         **_yt_dlp_cookie_opts(),
