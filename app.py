@@ -113,43 +113,48 @@ _YTDLP_FMT_PREF = (
 def _youtube_extract_info(url: str) -> dict:
     """Extraction yt-dlp avec plusieurs stratégies.
 
-    Le client YouTube « web » seul peut ne proposer aucun format compatible avec la chaîne
-    de sélection (souvent vu sur VPS / avec cookies). Les clients android_creator ou
-    tv_embedded débloquent en général les flux séparés vidéo+audio.
+    Sur VPS (cookies, métadonnées incomplètes, client « web » seul), la chaîne avec filtres
+    height/width peut ne matcher aucun format ; on ajoute des sélecteurs plus larges et des
+    player_client alternatifs (android_embedded, etc.). Si des cookies sont configurés, une
+    série de tentatives sans fichier cookie est faite en dernier recours.
     """
     cookie = _yt_dlp_cookie_opts()
-    base: dict = {"quiet": True, "no_warnings": True, **cookie}
-    attempts: list[dict] = [
-        {**base, "format": _YTDLP_FMT_PREF},
-        {
-            **base,
-            "format": _YTDLP_FMT_PREF,
-            "extractor_args": {"youtube": {"player_client": ["android_creator"]}},
-        },
-        {
-            **base,
-            "format": _YTDLP_FMT_PREF,
-            "extractor_args": {"youtube": {"player_client": ["tv_embedded"]}},
-        },
-        {
-            **base,
-            "format": "bv*+ba/b",
-            "extractor_args": {"youtube": {"player_client": ["android_creator"]}},
-        },
-        {
-            **base,
-            "format": "best",
-            "extractor_args": {"youtube": {"player_client": ["android"]}},
-        },
+    bases: list[dict] = [{"quiet": True, "no_warnings": True, **cookie}]
+    if cookie:
+        bases.append({"quiet": True, "no_warnings": True})
+
+    # (format string, extractor_args fusionné dans opts ; {} = défaut yt-dlp)
+    specs: list[tuple[str, dict]] = [
+        (_YTDLP_FMT_PREF, {}),
+        (_YTDLP_FMT_PREF, {"extractor_args": {"youtube": {"player_client": ["android_creator"]}}}),
+        (_YTDLP_FMT_PREF, {"extractor_args": {"youtube": {"player_client": ["android_embedded"]}}}),
+        (_YTDLP_FMT_PREF, {"extractor_args": {"youtube": {"player_client": ["tv_embedded"]}}}),
+        # Sans filtres height/width (évite « Requested format » si métadonnées absentes)
+        ("bestvideo+bestaudio/best", {}),
+        (
+            "bestvideo+bestaudio/best",
+            {"extractor_args": {"youtube": {"player_client": ["android_creator"]}}},
+        ),
+        (
+            "bestvideo+bestaudio/best",
+            {"extractor_args": {"youtube": {"player_client": ["android_embedded"]}}},
+        ),
+        ("bv*+ba/b", {"extractor_args": {"youtube": {"player_client": ["android_creator"]}}}),
+        ("bv*+ba/b", {"extractor_args": {"youtube": {"player_client": ["android_embedded"]}}}),
+        ("best", {"extractor_args": {"youtube": {"player_client": ["android"]}}}),
+        ("bestvideo+bestaudio/best", {"extractor_args": {"youtube": {"player_client": ["tv_embedded"]}}}),
+        ("best", {}),
     ]
 
     last_exc: Exception | None = None
-    for opts in attempts:
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                return ydl.extract_info(url, download=False)
-        except Exception as exc:
-            last_exc = exc
+    for base in bases:
+        for fmt, extra in specs:
+            opts = {**base, "format": fmt, **extra}
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    return ydl.extract_info(url, download=False)
+            except Exception as exc:
+                last_exc = exc
     raise last_exc if last_exc else RuntimeError("_youtube_extract_info: aucune tentative")
 
 
