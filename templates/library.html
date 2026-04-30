@@ -1,0 +1,1468 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Ma bibliothèque — YouTube Clipper</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      min-height: 100vh;
+      background: #0f0f11;
+      font-family: 'Inter', system-ui, sans-serif;
+      color: #e2e2e2;
+    }
+
+    /* ── Top bar ──────────────────────────────────────── */
+    .topbar {
+      display: flex; align-items: center; gap: 16px;
+      padding: 16px 24px;
+      background: #13131a;
+      border-bottom: 1px solid #1e1e28;
+      position: sticky; top: 0; z-index: 50;
+    }
+    .topbar-logo {
+      display: flex; align-items: center; gap: 10px;
+      text-decoration: none;
+    }
+    .logo-icon {
+      width: 36px; height: 36px;
+      background: linear-gradient(135deg, #ff4e4e, #cc0000);
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; flex-shrink: 0;
+    }
+    .topbar-logo h1 { font-size: 1.1rem; font-weight: 700; color: #e2e2e2; }
+    .topbar-logo h1 span { color: #ff4e4e; }
+
+    .topbar-title {
+      font-size: 1rem; font-weight: 700; color: #aaa;
+      padding-left: 16px; border-left: 1px solid #2a2a32;
+    }
+
+    .back-link {
+      margin-left: auto;
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 6px 12px;
+      background: #1e1e28; border: 1px solid #3a3a50;
+      border-radius: 8px; color: #aaa;
+      font-size: .78rem; font-weight: 600;
+      letter-spacing: .04em; text-decoration: none;
+      transition: background .15s, border-color .15s, color .15s;
+      white-space: nowrap;
+    }
+    .back-link:hover { background: #252535; border-color: #ff4e4e; color: #ff7070; }
+
+    /* ── Page layout ──────────────────────────────────── */
+    .page { max-width: 1100px; margin: 0 auto; padding: 28px 20px 120px; }
+
+    /* ── Filter bar ───────────────────────────────────── */
+    .filter-bar {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+      margin-bottom: 24px;
+    }
+    #searchInput {
+      flex: 1; min-width: 160px;
+      background: #1a1a1f; border: 1px solid #2a2a32;
+      border-radius: 10px; padding: 9px 14px;
+      font-size: .88rem; color: #e2e2e2; outline: none;
+      transition: border-color .2s;
+    }
+    #searchInput:focus { border-color: #5a5aff; }
+    #searchInput::placeholder { color: #333; }
+
+    .tag-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+    .tag-filter-pill {
+      padding: 4px 10px;
+      background: #1a1a28; border: 1px solid #2a2a45;
+      border-radius: 20px; color: #777;
+      font-size: .72rem; font-weight: 600; letter-spacing: .04em;
+      cursor: pointer; transition: all .15s; user-select: none;
+    }
+    .tag-filter-pill:hover { background: #252540; border-color: #5a5aff; color: #aab; }
+    .tag-filter-pill.active { background: #25254a; border-color: #7a8fff; color: #aabfff; }
+    .tag-filter-pill.all-pill { color: #888; border-color: #333; }
+    .tag-filter-pill.all-pill.active { background: #1e1e28; border-color: #888; color: #ccc; }
+
+    /* ── Storage info ─────────────────────────────────── */
+    #storageInfo {
+      font-size: .72rem; color: #444;
+      margin-left: auto; white-space: nowrap;
+    }
+
+    /* ── Empty state ──────────────────────────────────── */
+    #emptyState {
+      display: none;
+      flex-direction: column; align-items: center;
+      gap: 12px; padding: 64px 20px;
+      color: #444; text-align: center;
+    }
+    #emptyState .empty-icon { font-size: 3rem; }
+    #emptyState p { font-size: .9rem; line-height: 1.6; max-width: 300px; }
+    #emptyState a { color: #7a8fff; text-decoration: none; }
+    #emptyState a:hover { text-decoration: underline; }
+
+    /* ── Clip grid ────────────────────────────────────── */
+    #clipGrid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 18px;
+    }
+
+    /* ── Clip card ────────────────────────────────────── */
+    .clip-card {
+      background: #1a1a1f;
+      border: 1px solid #2a2a32;
+      border-radius: 16px; overflow: hidden;
+      transition: border-color .2s, transform .15s;
+      position: relative;
+    }
+    .clip-card:hover { border-color: #3a3a55; transform: translateY(-1px); }
+    .clip-card.selected { border-color: #5a5aff; }
+
+    .card-checkbox {
+      position: absolute; top: 10px; left: 10px; z-index: 5;
+      width: 22px; height: 22px;
+      accent-color: #7a8fff; cursor: pointer;
+      opacity: 0; transition: opacity .2s;
+    }
+    .clip-card:hover .card-checkbox,
+    .clip-card.selected .card-checkbox { opacity: 1; }
+
+    .card-video-wrap {
+      position: relative; padding-bottom: 56.25%;
+      background: #0d0d0f; overflow: hidden;
+    }
+    .card-video-wrap video {
+      position: absolute; top: 0; left: 0;
+      width: 100%; height: 100%;
+      object-fit: cover; cursor: pointer;
+    }
+    .card-video-overlay {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(0,0,0,.35); opacity: 0;
+      transition: opacity .2s; pointer-events: none;
+      font-size: 2.2rem;
+    }
+    .clip-card:hover .card-video-overlay { opacity: 1; }
+
+    .card-body { padding: 14px 14px 10px; }
+
+    .card-title {
+      font-size: .9rem; font-weight: 600; color: #e0e0e0;
+      margin-bottom: 6px;
+      outline: none; border-radius: 4px;
+      padding: 1px 3px; margin-left: -3px;
+      cursor: text;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .card-title:focus {
+      background: #111118; color: #fff;
+      box-shadow: 0 0 0 2px #5a5aff40;
+      white-space: normal; overflow: visible; text-overflow: unset;
+    }
+
+    .card-meta {
+      font-size: .72rem; color: #555; margin-bottom: 10px;
+    }
+
+    .card-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 12px; min-height: 24px; }
+    .tag-pill {
+      display: inline-flex; align-items: center; gap: 3px;
+      padding: 2px 8px;
+      background: #1e1e38; border: 1px solid #2a2a55;
+      border-radius: 20px; color: #7a8fff;
+      font-size: .68rem; font-weight: 600; letter-spacing: .03em;
+      cursor: pointer; transition: background .15s;
+      user-select: none;
+    }
+    .tag-pill:hover { background: #252550; }
+    .tag-pill .tag-remove {
+      color: #4a4a70; font-size: .75rem; line-height: 1;
+      cursor: pointer; border: none; background: none; padding: 0 0 0 2px;
+      transition: color .15s;
+    }
+    .tag-pill:hover .tag-remove { color: #888; }
+    .tag-pill .tag-remove:hover { color: #ff6060 !important; }
+    .tag-add-btn {
+      padding: 2px 8px;
+      background: #161620; border: 1px dashed #2a2a40;
+      border-radius: 20px; color: #444;
+      font-size: .72rem; cursor: pointer;
+      transition: color .15s, border-color .15s;
+    }
+    .tag-add-btn:hover { color: #7a8fff; border-color: #5a5aff; }
+
+    .card-actions {
+      display: flex; gap: 6px; padding: 0 14px 14px;
+    }
+    .card-btn {
+      flex: 1; padding: 7px 4px;
+      background: #1e1e28; border: 1px solid #2a2a40;
+      border-radius: 8px; color: #999;
+      font-size: .78rem; font-weight: 600; cursor: pointer;
+      transition: background .15s, border-color .15s, color .15s;
+    }
+    .card-btn:hover { background: #252535; border-color: #5a5aff; color: #aabfff; }
+    .card-btn-danger:hover { border-color: #ff4e4e; color: #ff7070; background: #200f0f; }
+
+    /* ── Montage bar (floating) ───────────────────────── */
+    #montageBar {
+      display: none;
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
+      background: #13131a;
+      border-top: 1px solid #2a2a40;
+      padding: 14px 24px;
+      align-items: center; gap: 14px;
+      box-shadow: 0 -8px 32px rgba(0,0,0,.6);
+    }
+    #montageBar.visible { display: flex; }
+    .montage-count { font-size: .85rem; font-weight: 600; color: #aaa; flex-shrink: 0; }
+    .montage-count span { color: #7a8fff; }
+    #clearSelBtn {
+      padding: 7px 14px;
+      background: transparent; border: 1px solid #333;
+      border-radius: 8px; color: #666; font-size: .78rem;
+      cursor: pointer; transition: border-color .15s, color .15s;
+    }
+    #clearSelBtn:hover { border-color: #ff4e4e; color: #ff7070; }
+    #createMontageBtn {
+      margin-left: auto;
+      padding: 10px 22px;
+      background: linear-gradient(135deg, #5a8fff, #3355cc);
+      border: none; border-radius: 10px;
+      font-size: .88rem; font-weight: 700; color: #fff;
+      cursor: pointer; transition: opacity .2s;
+    }
+    #createMontageBtn:hover { opacity: .88; }
+
+    /* ── Montage modal ────────────────────────────────── */
+    #montageModal {
+      display: none;
+      position: fixed; inset: 0; z-index: 200;
+      background: rgba(0,0,0,.75);
+      align-items: center; justify-content: center;
+      padding: 20px;
+    }
+    #montageModal.open { display: flex; }
+    .modal-box {
+      background: #1a1a1f; border: 1px solid #2a2a40;
+      border-radius: 20px; padding: 28px;
+      width: 100%; max-width: 520px;
+      max-height: 80vh; overflow-y: auto;
+    }
+    .modal-title { font-size: 1.1rem; font-weight: 700; margin-bottom: 20px; }
+
+    #montageList { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }
+    .montage-item {
+      display: flex; align-items: center; gap: 10px;
+      background: #111114; border: 1px solid #222;
+      border-radius: 10px; padding: 10px 12px;
+    }
+    .montage-item-title { flex: 1; font-size: .85rem; color: #ccc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .montage-item-meta { font-size: .72rem; color: #555; flex-shrink: 0; }
+    .montage-move {
+      display: flex; flex-direction: column; gap: 2px; flex-shrink: 0;
+    }
+    .montage-move button {
+      background: #1e1e28; border: 1px solid #2a2a40;
+      border-radius: 4px; color: #666; font-size: .7rem;
+      width: 22px; height: 18px; cursor: pointer; line-height: 1;
+      transition: background .1s, color .1s;
+    }
+    .montage-move button:hover { background: #252535; color: #aaa; }
+    .montage-move button:disabled { opacity: .3; cursor: default; }
+
+    .modal-footer { display: flex; gap: 10px; }
+    #cancelMontageBtn {
+      flex: 1; padding: 11px;
+      background: transparent; border: 1px solid #333;
+      border-radius: 10px; color: #666; font-weight: 600;
+      cursor: pointer; transition: border-color .15s, color .15s;
+    }
+    #cancelMontageBtn:hover { border-color: #555; color: #aaa; }
+    #generateMontageBtn {
+      flex: 2; padding: 11px;
+      background: linear-gradient(135deg, #5a8fff, #3355cc);
+      border: none; border-radius: 10px;
+      font-size: .9rem; font-weight: 700; color: #fff;
+      cursor: pointer; transition: opacity .2s;
+    }
+    #generateMontageBtn:hover:not(:disabled) { opacity: .88; }
+    #generateMontageBtn:disabled { opacity: .45; cursor: not-allowed; }
+
+    /* ── Tag editor popover ───────────────────────────── */
+    .tag-popover {
+      position: absolute; z-index: 20;
+      background: #1e1e28; border: 1px solid #3a3a55;
+      border-radius: 12px; padding: 12px;
+      box-shadow: 0 8px 32px rgba(0,0,0,.6);
+      min-width: 220px;
+    }
+    .tag-popover-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
+    .tag-popover input {
+      width: 100%; background: #111114; border: 1px solid #2a2a40;
+      border-radius: 7px; padding: 6px 10px;
+      font-size: .82rem; color: #e2e2e2; outline: none;
+      transition: border-color .2s;
+    }
+    .tag-popover input:focus { border-color: #5a5aff; }
+    .tag-popover input::placeholder { color: #333; }
+    .tag-popover-hint { font-size: .67rem; color: #444; margin-top: 5px; }
+
+    /* ── Import from server button ───────────────────── */
+    .card-btn-import { color: #7a8fff; }
+    .card-btn-import:hover:not(:disabled) { background: #1a1a38; border-color: #5a5aff; color: #aabfff; }
+    .card-btn-import:disabled { opacity: 1; cursor: default; }
+
+    /* ── Cloud backup button ─────────────────────────── */
+    .card-btn-cloud { color: #5a8fff; }
+    .card-btn-cloud:hover { background: #1a1a38; border-color: #5a8fff; color: #aabfff; }
+    .card-btn-cloud.backed-up { color: #2ecc71; border-color: #1a5a30; }
+    .card-btn-cloud.backed-up:hover { background: #0f2a1a; border-color: #2ecc71; color: #5dffa0; }
+
+    /* ── Server backups section ───────────────────────── */
+    #serverSection {
+      margin-top: 48px;
+      border-top: 1px solid #1e1e28;
+      padding-top: 28px;
+    }
+    .section-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 18px;
+    }
+    .section-title { font-size: 1rem; font-weight: 700; color: #ccc; }
+    .section-subtitle { font-size: .78rem; color: #444; margin-top: 2px; }
+
+    #serverBackupGrid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 14px;
+    }
+    .server-card {
+      background: #141420; border: 1px solid #1e1e35;
+      border-radius: 14px; padding: 14px 16px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .server-card-title { font-size: .88rem; font-weight: 600; color: #ccc; }
+    .server-card-meta { font-size: .72rem; color: #555; }
+    .server-card-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+    .server-card-actions { display: flex; gap: 6px; margin-top: 4px; }
+
+    /* ── Backup key modal ─────────────────────────────── */
+    #backupKeyModal {
+      display: none; position: fixed; inset: 0; z-index: 300;
+      background: rgba(0,0,0,.8);
+      align-items: center; justify-content: center; padding: 20px;
+    }
+    #backupKeyModal.open { display: flex; }
+    #backupKeyModal .modal-box { max-width: 380px; }
+    #backupKeyInput {
+      width: 100%; background: #111114; border: 1px solid #2a2a40;
+      border-radius: 9px; padding: 10px 14px; margin: 14px 0 4px;
+      font-size: .9rem; color: #e2e2e2; outline: none;
+      transition: border-color .2s;
+    }
+    #backupKeyInput:focus { border-color: #5a8fff; }
+    .key-hint { font-size: .72rem; color: #555; margin-bottom: 16px; }
+
+    /* ── Spinner ──────────────────────────────────────── */
+    .spin {
+      width: 22px; height: 22px;
+      border: 2px solid #222; border-top-color: #5a8fff;
+      border-radius: 50%; animation: spin .7s linear infinite;
+      display: inline-block; vertical-align: middle; margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Video player modal ───────────────────────────── */
+    #playerModal {
+      display: none;
+      position: fixed; inset: 0; z-index: 400;
+      background: rgba(0,0,0,.92);
+      align-items: center; justify-content: center;
+      padding: 16px;
+    }
+    #playerModal.open { display: flex; }
+
+    .player-inner {
+      width: 100%; max-width: 900px;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+
+    .player-header {
+      display: flex; align-items: center; gap: 12px;
+    }
+    .player-title {
+      flex: 1; font-size: .98rem; font-weight: 700; color: #e2e2e2;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .player-close {
+      width: 36px; height: 36px; flex-shrink: 0;
+      background: #1e1e28; border: 1px solid #2a2a40;
+      border-radius: 9px; color: #aaa; font-size: 1rem;
+      cursor: pointer; transition: background .15s, color .15s;
+    }
+    .player-close:hover { background: #2a1010; border-color: #ff4e4e; color: #ff7070; }
+
+    .player-video-wrap {
+      border-radius: 14px; overflow: hidden;
+      background: #050507;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #modalVideo {
+      width: 100%; display: block;
+      max-height: calc(100vh - 160px);
+      outline: none;
+    }
+
+    .player-footer {
+      display: flex; align-items: center; gap: 10px;
+    }
+    .player-nav {
+      padding: 8px 14px;
+      background: #1e1e28; border: 1px solid #2a2a40;
+      border-radius: 9px; color: #aaa; font-size: .8rem; font-weight: 600;
+      cursor: pointer; transition: background .15s, border-color .15s, color .15s;
+      white-space: nowrap;
+    }
+    .player-nav:hover:not(:disabled) { background: #252535; border-color: #5a5aff; color: #aabfff; }
+    .player-nav:disabled { opacity: .25; cursor: default; }
+    .player-counter { flex: 1; text-align: center; font-size: .78rem; color: #444; }
+    .player-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+
+    /* ── Responsive ───────────────────────────────────── */
+    @media (max-width: 620px) {
+      .topbar { padding: 12px 14px; gap: 10px; }
+      .topbar-title { display: none; }
+      .page { padding: 18px 12px 100px; }
+      #clipGrid { grid-template-columns: 1fr; }
+      #montageBar { padding: 12px 14px; flex-wrap: wrap; }
+      #createMontageBtn { width: 100%; text-align: center; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="topbar">
+  <a href="/" class="topbar-logo">
+    <div class="logo-icon">✂️</div>
+    <h1>YouTube <span>Clipper</span></h1>
+  </a>
+  <span class="topbar-title">📚 Ma bibliothèque</span>
+  <a href="/" class="back-link">+ Nouveau clip</a>
+</div>
+
+<!-- Page content -->
+<div class="page">
+
+  <!-- Filter bar -->
+  <div class="filter-bar">
+    <input type="text" id="searchInput" placeholder="🔍 Rechercher par titre…" />
+    <div class="tag-filters" id="tagFilters">
+      <span class="tag-filter-pill all-pill active" data-tag="__all__" onclick="filterByTag('__all__')">Tous</span>
+    </div>
+    <span id="storageInfo"></span>
+  </div>
+
+  <!-- Empty state -->
+  <div id="emptyState">
+    <div class="empty-icon">📭</div>
+    <p>Votre bibliothèque est vide.<br>
+       <a href="/">Créez votre premier clip</a> et sauvegardez-le ici.</p>
+  </div>
+
+  <!-- Clip grid -->
+  <div id="clipGrid"></div>
+
+  {% if backup_enabled %}
+  <!-- Server backups section -->
+  <div id="serverSection">
+    <div class="section-header">
+      <div>
+        <div class="section-title">☁️ Sauvegardes serveur</div>
+        <div class="section-subtitle">Clips stockés sur votre serveur — accessibles depuis n'importe quel navigateur</div>
+      </div>
+      <button class="card-btn" style="flex:0;padding:7px 14px;font-size:.78rem" onclick="loadServerBackups()">↻ Actualiser</button>
+    </div>
+    <div id="serverBackupGrid"><p style="color:#444;font-size:.82rem">Chargement…</p></div>
+  </div>
+  {% endif %}
+
+</div>
+
+<!-- Montage floating bar -->
+<div id="montageBar">
+  <span class="montage-count"><span id="selCount">0</span> clip(s) sélectionné(s)</span>
+  <button id="clearSelBtn" onclick="clearSelection()">✕ Désélectionner</button>
+  <button id="createMontageBtn" onclick="openMontageModal()">🎬 Créer le montage</button>
+</div>
+
+<!-- Video player modal -->
+<div id="playerModal">
+  <div class="player-inner">
+    <div class="player-header">
+      <div class="player-title" id="playerTitle">—</div>
+      <button class="player-close" onclick="closePlayerModal()" title="Fermer (Échap)">✕</button>
+    </div>
+    <div class="player-video-wrap">
+      <video id="modalVideo" controls preload="auto"></video>
+    </div>
+    <div class="player-footer">
+      <button class="player-nav" id="playerPrev" onclick="stepPlayer(-1)" title="Clip précédent (←)">← Préc.</button>
+      <span class="player-counter" id="playerCounter"></span>
+      <div class="player-tags" id="playerTags"></div>
+      <button class="player-nav" id="playerNext" onclick="stepPlayer(1)" title="Clip suivant (→)">Suiv. →</button>
+      <button class="player-nav" onclick="downloadCurrentFromPlayer()" title="Télécharger ce clip">⬇</button>
+    </div>
+  </div>
+</div>
+
+<!-- Backup key modal -->
+<div id="backupKeyModal">
+  <div class="modal-box">
+    <div class="modal-title">🔑 Clé de backup serveur</div>
+    <p style="font-size:.83rem;color:#666">Entrez la clé secrète configurée sur votre serveur (<code>YT_CLIPPER_BACKUP_SECRET</code>).</p>
+    <input type="password" id="backupKeyInput" placeholder="Clé secrète…" autocomplete="current-password" />
+    <p class="key-hint">La clé sera mémorisée dans ce navigateur.</p>
+    <div class="modal-footer">
+      <button id="cancelBackupKeyBtn" onclick="closeBackupKeyModal()" style="flex:1;padding:11px;background:transparent;border:1px solid #333;border-radius:10px;color:#666;font-weight:600;cursor:pointer">Annuler</button>
+      <button onclick="confirmBackupKey()" style="flex:2;padding:11px;background:linear-gradient(135deg,#5a8fff,#3355cc);border:none;border-radius:10px;font-size:.9rem;font-weight:700;color:#fff;cursor:pointer">Confirmer</button>
+    </div>
+  </div>
+</div>
+
+<!-- Montage modal -->
+<div id="montageModal">
+  <div class="modal-box">
+    <div class="modal-title">🎬 Ordre du montage</div>
+    <p style="font-size:.82rem;color:#555;margin-bottom:16px">
+      Réordonnez les clips, puis cliquez sur Générer.
+    </p>
+    <div id="montageList"></div>
+    <div class="modal-footer">
+      <button id="cancelMontageBtn" onclick="closeMontageModal()">Annuler</button>
+      <button id="generateMontageBtn" onclick="generateMontage()">⚡ Générer le montage</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/clipdb.js"></script>
+<script>
+// ═══════════════════════════════════════════════════════════
+// State
+// ═══════════════════════════════════════════════════════════
+let allClips       = [];   // tous les clips de l'IDB (triés desc)
+let filteredClips  = [];   // après filtres
+let activeTag      = '__all__';
+let searchQuery    = '';
+let selectedIds    = new Set();
+let montageOrder   = [];   // liste [{id, title, duration}] dans l'ordre du modal
+
+const BACKUP_ENABLED = {{ backup_enabled | tojson }};
+
+// ═══════════════════════════════════════════════════════════
+// Init
+// ═══════════════════════════════════════════════════════════
+async function init() {
+  await loadClips();
+  updateStorageInfo();
+  if (BACKUP_ENABLED) {
+    loadServerBackups();
+    syncBackupBadges();
+  }
+}
+init();
+
+async function loadClips() {
+  allClips = await ClipDB.getAll();
+  buildTagFilters();
+  applyFilters();
+}
+
+// ═══════════════════════════════════════════════════════════
+// Filters
+// ═══════════════════════════════════════════════════════════
+function buildTagFilters() {
+  const allTags = new Set();
+  allClips.forEach(c => (c.tags || []).forEach(t => allTags.add(t)));
+  const container = document.getElementById('tagFilters');
+  container.innerHTML = `<span class="tag-filter-pill all-pill${activeTag === '__all__' ? ' active' : ''}" data-tag="__all__" onclick="filterByTag('__all__')">Tous</span>`;
+  [...allTags].sort().forEach(tag => {
+    const pill = document.createElement('span');
+    pill.className = 'tag-filter-pill' + (activeTag === tag ? ' active' : '');
+    pill.dataset.tag = tag;
+    pill.textContent = '#' + tag;
+    pill.onclick = () => filterByTag(tag);
+    container.appendChild(pill);
+  });
+}
+
+function filterByTag(tag) {
+  activeTag = tag;
+  document.querySelectorAll('.tag-filter-pill').forEach(p => {
+    p.classList.toggle('active', p.dataset.tag === tag);
+  });
+  applyFilters();
+}
+
+document.getElementById('searchInput').addEventListener('input', function() {
+  searchQuery = this.value.trim().toLowerCase();
+  applyFilters();
+});
+
+function applyFilters() {
+  filteredClips = allClips.filter(c => {
+    const matchTag = activeTag === '__all__' || (c.tags || []).includes(activeTag);
+    const matchSearch = !searchQuery || c.title.toLowerCase().includes(searchQuery);
+    return matchTag && matchSearch;
+  });
+  renderGrid();
+}
+
+// ═══════════════════════════════════════════════════════════
+// Grid rendering
+// ═══════════════════════════════════════════════════════════
+function renderGrid() {
+  const grid = document.getElementById('clipGrid');
+  const empty = document.getElementById('emptyState');
+
+  // Révoquer les anciens ObjectURLs
+  grid.querySelectorAll('video[data-url]').forEach(v => URL.revokeObjectURL(v.dataset.url));
+  grid.innerHTML = '';
+
+  if (filteredClips.length === 0) {
+    empty.style.display = 'flex';
+    return;
+  }
+  empty.style.display = 'none';
+
+  filteredClips.forEach(clip => {
+    const card = createCard(clip);
+    grid.appendChild(card);
+    lazyLoadVideo(card, clip.id);
+  });
+}
+
+function createCard(clip) {
+  const isSelected = selectedIds.has(clip.id);
+  const card = document.createElement('div');
+  card.className = 'clip-card' + (isSelected ? ' selected' : '');
+  card.dataset.id = clip.id;
+
+  card.innerHTML = `
+    <input type="checkbox" class="card-checkbox" ${isSelected ? 'checked' : ''}
+           onchange="toggleSelect(${clip.id}, this.checked)" title="Sélectionner pour montage">
+    <div class="card-video-wrap">
+      <video preload="metadata" muted playsinline></video>
+      <div class="card-video-overlay">▶</div>
+    </div>
+    <div class="card-body">
+      <div class="card-title"
+           contenteditable="true"
+           onblur="saveTitle(${clip.id}, this)"
+           onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur()}"
+           title="Cliquez pour renommer">${escHtml(clip.title)}</div>
+      <div class="card-meta">${fmtDuration(clip.duration)} · ${fmtSize(clip.size)} · ${fmtDate(clip.created_at)}</div>
+      <div class="card-tags" id="card-tags-${clip.id}">
+        ${renderTagPills(clip)}
+        <button class="tag-add-btn" onclick="openTagEditor(${clip.id}, this)" title="Modifier les tags">+ tag</button>
+      </div>
+    </div>
+    <div class="card-actions">
+      <button class="card-btn" onclick="downloadFromLib(${clip.id})">⬇ Télécharger</button>
+      ${BACKUP_ENABLED ? `<button class="card-btn card-btn-cloud" id="backup-btn-${clip.id}" onclick="backupToServer(${clip.id})" title="Sauvegarder sur le serveur">☁️</button>` : ''}
+      <button class="card-btn card-btn-danger" onclick="deleteFromLib(${clip.id})" title="Supprimer">🗑</button>
+    </div>`;
+
+  // Clic sur la vignette → ouvrir le player modal
+  const videoWrap = card.querySelector('.card-video-wrap');
+  videoWrap.addEventListener('click', () => openPlayerModal(clip.id));
+
+  return card;
+}
+
+function renderTagPills(clip) {
+  return (clip.tags || []).map(t =>
+    `<span class="tag-pill">
+      <span onclick="filterByTag('${escHtml(t)}')">#${escHtml(t)}</span>
+      <button class="tag-remove" onclick="removeTag(${clip.id}, '${escHtml(t)}')" title="Retirer ce tag">✕</button>
+    </span>`
+  ).join('');
+}
+
+async function removeTag(id, tag) {
+  const clip = allClips.find(c => c.id === id);
+  if (!clip) return;
+  clip.tags = (clip.tags || []).filter(t => t !== tag);
+  await ClipDB.update(id, { tags: clip.tags });
+  refreshCardTags(id);
+  buildTagFilters();
+}
+
+// ── Lazy video loading via IntersectionObserver ─────────
+const videoObserver = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (!entry.isIntersecting) return;
+    const card = entry.target;
+    videoObserver.unobserve(card);
+    const clipId = parseInt(card.dataset.id, 10);
+    const video  = card.querySelector('video');
+    if (video.src) return;
+    ClipDB.get(clipId).then(c => {
+      if (!c) return;
+      const url = URL.createObjectURL(c.blob);
+      video.src = url;
+      video.dataset.url = url;
+      video.addEventListener('loadedmetadata', () => {
+        if (video.duration > 1) video.currentTime = 1;
+      }, { once: true });
+    });
+  });
+}, { rootMargin: '150px' });
+
+function lazyLoadVideo(card, id) {
+  videoObserver.observe(card);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Actions : download / delete / title / tags
+// ═══════════════════════════════════════════════════════════
+async function downloadFromLib(id) {
+  const clip = await ClipDB.get(id);
+  if (!clip) return;
+  const url = URL.createObjectURL(clip.blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = clip.filename || clip.title + '.mp4';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 15000);
+}
+
+async function deleteFromLib(id) {
+  if (!confirm('Supprimer ce clip de la bibliothèque ?')) return;
+  const card = document.querySelector(`.clip-card[data-id="${id}"]`);
+  if (card) {
+    const v = card.querySelector('video');
+    if (v && v.dataset.url) URL.revokeObjectURL(v.dataset.url);
+    card.remove();
+  }
+  selectedIds.delete(id);
+  await ClipDB.remove(id);
+  allClips = allClips.filter(c => c.id !== id);
+
+  // Nettoyer le cache player
+  if (playerCache[id]) { URL.revokeObjectURL(playerCache[id]); delete playerCache[id]; }
+
+  // Nettoyer backedUpMap pour ce clip local (pour que le bouton serveur repasse à "📥 Importer")
+  if (backedUpMap[id]) {
+    const backupId = backedUpMap[id];
+    delete backedUpMap[id];
+    saveBackedUpMap();
+    // Mettre à jour la carte serveur correspondante si elle est visible
+    const serverBtn = document.getElementById(`import-btn-${backupId}`);
+    if (serverBtn) {
+      serverBtn.textContent = '📥 Importer';
+      serverBtn.style.color = '';
+      serverBtn.style.borderColor = '';
+      serverBtn.disabled = false;
+    }
+  }
+
+  buildTagFilters();
+  applyFilters();
+  updateSelectionBar();
+  updateStorageInfo();
+}
+
+async function saveTitle(id, el) {
+  const newTitle = el.textContent.trim() || 'clip';
+  el.textContent = newTitle;
+  await ClipDB.update(id, { title: newTitle });
+  const clip = allClips.find(c => c.id === id);
+  if (clip) clip.title = newTitle;
+}
+
+// ═══════════════════════════════════════════════════════════
+// Tag editor (popover)
+// ═══════════════════════════════════════════════════════════
+let currentTagEditorId = null;
+let tagPopoverEl = null;
+
+function openTagEditor(id, btn) {
+  closeTagEditor();
+  currentTagEditorId = id;
+  const clip = allClips.find(c => c.id === id);
+  if (!clip) return;
+
+  const popover = document.createElement('div');
+  popover.className = 'tag-popover';
+  tagPopoverEl = popover;
+
+  popover.innerHTML = `
+    <div class="tag-popover-tags" id="popover-tags-${id}">
+      ${(clip.tags || []).map(t =>
+        `<span class="tag-pill">#${escHtml(t)}
+          <button class="tag-remove" onclick="removeTagFromEditor(${id}, '${escHtml(t)}')">✕</button>
+        </span>`
+      ).join('')}
+    </div>
+    <input type="text" id="newTagInput" placeholder="Ajouter un tag…" autocomplete="off" />
+    <div class="tag-popover-hint">Appuyez sur Entrée pour ajouter</div>`;
+
+  // Positionnement relatif au bouton
+  btn.style.position = 'relative';
+  btn.parentElement.style.position = 'relative';
+  btn.parentElement.appendChild(popover);
+
+  const input = popover.querySelector('#newTagInput');
+  input.focus();
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const tag = input.value.trim().toLowerCase().replace(/[^a-z0-9_\-]/g, '');
+      if (tag) addTagFromEditor(id, tag, input);
+    }
+  });
+
+  setTimeout(() => {
+    document.addEventListener('click', outsideClickHandler, { once: true });
+  }, 10);
+}
+
+function outsideClickHandler(e) {
+  if (tagPopoverEl && !tagPopoverEl.contains(e.target)) {
+    closeTagEditor();
+  } else if (tagPopoverEl) {
+    setTimeout(() => document.addEventListener('click', outsideClickHandler, { once: true }), 10);
+  }
+}
+
+function closeTagEditor() {
+  if (tagPopoverEl) { tagPopoverEl.remove(); tagPopoverEl = null; }
+  currentTagEditorId = null;
+}
+
+async function addTagFromEditor(id, tag, input) {
+  const clip = allClips.find(c => c.id === id);
+  if (!clip) return;
+  if ((clip.tags || []).includes(tag)) { input.value = ''; return; }
+  clip.tags = [...(clip.tags || []), tag];
+  await ClipDB.update(id, { tags: clip.tags });
+  input.value = '';
+  // Mise à jour du popover
+  const container = document.getElementById(`popover-tags-${id}`);
+  if (container) {
+    container.innerHTML = clip.tags.map(t =>
+      `<span class="tag-pill">#${escHtml(t)}<button class="tag-remove" onclick="removeTagFromEditor(${id}, '${escHtml(t)}')">✕</button></span>`
+    ).join('');
+  }
+  // Mise à jour de la carte
+  refreshCardTags(id);
+  buildTagFilters();
+}
+
+async function removeTagFromEditor(id, tag) {
+  const clip = allClips.find(c => c.id === id);
+  if (!clip) return;
+  clip.tags = (clip.tags || []).filter(t => t !== tag);
+  await ClipDB.update(id, { tags: clip.tags });
+  const container = document.getElementById(`popover-tags-${id}`);
+  if (container) {
+    container.innerHTML = clip.tags.map(t =>
+      `<span class="tag-pill">#${escHtml(t)}<button class="tag-remove" onclick="removeTagFromEditor(${id}, '${escHtml(t)}')">✕</button></span>`
+    ).join('');
+  }
+  refreshCardTags(id);
+  buildTagFilters();
+}
+
+function refreshCardTags(id) {
+  const clip = allClips.find(c => c.id === id);
+  if (!clip) return;
+  const container = document.getElementById(`card-tags-${id}`);
+  if (!container) return;
+  const addBtn = container.querySelector('.tag-add-btn');
+  container.innerHTML = renderTagPills(clip);
+  if (addBtn) container.appendChild(addBtn);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Selection + montage bar
+// ═══════════════════════════════════════════════════════════
+function toggleSelect(id, checked) {
+  const card = document.querySelector(`.clip-card[data-id="${id}"]`);
+  if (checked) {
+    selectedIds.add(id);
+    card?.classList.add('selected');
+  } else {
+    selectedIds.delete(id);
+    card?.classList.remove('selected');
+  }
+  updateSelectionBar();
+}
+
+function clearSelection() {
+  selectedIds.clear();
+  document.querySelectorAll('.clip-card').forEach(c => {
+    c.classList.remove('selected');
+    const cb = c.querySelector('.card-checkbox');
+    if (cb) cb.checked = false;
+  });
+  updateSelectionBar();
+}
+
+function updateSelectionBar() {
+  const bar = document.getElementById('montageBar');
+  document.getElementById('selCount').textContent = selectedIds.size;
+  bar.classList.toggle('visible', selectedIds.size >= 2);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Montage modal
+// ═══════════════════════════════════════════════════════════
+function openMontageModal() {
+  montageOrder = [...selectedIds].map(id => {
+    const clip = allClips.find(c => c.id === id);
+    return clip ? { id: clip.id, title: clip.title, duration: clip.duration } : null;
+  }).filter(Boolean);
+
+  renderMontageList();
+  document.getElementById('montageModal').classList.add('open');
+}
+
+function closeMontageModal() {
+  document.getElementById('montageModal').classList.remove('open');
+}
+
+function renderMontageList() {
+  const list = document.getElementById('montageList');
+  list.innerHTML = '';
+  montageOrder.forEach((item, idx) => {
+    const div = document.createElement('div');
+    div.className = 'montage-item';
+    div.innerHTML = `
+      <div class="montage-move">
+        <button onclick="moveItem(${idx}, -1)" ${idx === 0 ? 'disabled' : ''} title="Remonter">▲</button>
+        <button onclick="moveItem(${idx},  1)" ${idx === montageOrder.length - 1 ? 'disabled' : ''} title="Descendre">▼</button>
+      </div>
+      <div class="montage-item-title" title="${escHtml(item.title)}">${escHtml(item.title)}</div>
+      <div class="montage-item-meta">${fmtDuration(item.duration)}</div>`;
+    list.appendChild(div);
+  });
+}
+
+function moveItem(idx, dir) {
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= montageOrder.length) return;
+  [montageOrder[idx], montageOrder[newIdx]] = [montageOrder[newIdx], montageOrder[idx]];
+  renderMontageList();
+}
+
+async function generateMontage() {
+  const btn = document.getElementById('generateMontageBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span> Génération…';
+
+  try {
+    const formData = new FormData();
+    for (const item of montageOrder) {
+      const clip = await ClipDB.get(item.id);
+      if (!clip) throw new Error(`Clip "${item.title}" introuvable.`);
+      formData.append('clips', clip.blob, `${item.id}.mp4`);
+    }
+
+    const res = await fetch('/merge', { method: 'POST', body: formData });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Erreur serveur (${res.status})`);
+    }
+
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'montage.mp4';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 15000);
+
+    closeMontageModal();
+    clearSelection();
+
+    // Option : sauvegarder le montage dans la bibliothèque
+    if (confirm('Montage téléchargé ! Voulez-vous aussi le sauvegarder dans votre bibliothèque ?')) {
+      const totalDur = montageOrder.reduce((sum, i) => sum + (i.duration || 0), 0);
+      await ClipDB.save(blob, {
+        title: 'montage',
+        filename: 'montage.mp4',
+        tags: ['montage'],
+        duration: totalDur,
+      });
+      await loadClips();
+    }
+  } catch(e) {
+    alert('Erreur : ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '⚡ Générer le montage';
+  }
+}
+
+// Fermer la modal en cliquant à l'extérieur
+document.getElementById('montageModal').addEventListener('click', function(e) {
+  if (e.target === this) closeMontageModal();
+});
+
+// ═══════════════════════════════════════════════════════════
+// Storage info
+// ═══════════════════════════════════════════════════════════
+async function updateStorageInfo() {
+  const info = await ClipDB.storageInfo();
+  if (!info) return;
+  const used  = fmtSize(info.usage || 0);
+  const quota = fmtSize(info.quota || 0);
+  document.getElementById('storageInfo').textContent = `Stockage : ${used} / ${quota}`;
+}
+
+// ═══════════════════════════════════════════════════════════
+// Utilities
+// ═══════════════════════════════════════════════════════════
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function fmtDuration(sec) {
+  if (!sec || sec <= 0) return '—';
+  sec = Math.round(sec);
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
+
+function fmtSize(bytes) {
+  if (!bytes || bytes <= 0) return '—';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function fmtDate(iso) {
+  if (!iso) return '';
+  try {
+    return new Date(iso).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' });
+  } catch(_) { return ''; }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Video player modal
+// ═══════════════════════════════════════════════════════════
+let playerIdx = -1;                    // index dans filteredClips
+const playerCache = {};                // clipId → ObjectURL (évite les doublons)
+
+async function openPlayerModal(clipId) {
+  const idx = filteredClips.findIndex(c => c.id === clipId);
+  if (idx === -1) return;
+  playerIdx = idx;
+  await showPlayerAt(idx);
+  document.getElementById('playerModal').classList.add('open');
+}
+
+async function showPlayerAt(idx) {
+  const clip = filteredClips[idx];
+  if (!clip) return;
+
+  // En-tête
+  document.getElementById('playerTitle').textContent = clip.title;
+  document.getElementById('playerCounter').textContent = `${idx + 1} / ${filteredClips.length}`;
+
+  // Tags
+  const tagsEl = document.getElementById('playerTags');
+  tagsEl.innerHTML = (clip.tags || []).map(t =>
+    `<span class="tag-pill" style="cursor:default">#${escHtml(t)}</span>`
+  ).join('');
+
+  // Navigation
+  document.getElementById('playerPrev').disabled = idx === 0;
+  document.getElementById('playerNext').disabled = idx === filteredClips.length - 1;
+
+  // Vidéo : réutiliser l'ObjectURL de la carte si dispo, sinon charger depuis IDB
+  const video = document.getElementById('modalVideo');
+  video.pause();
+  video.src = '';
+
+  let url = playerCache[clip.id];
+  if (!url) {
+    // Vérifier si la vignette de la carte a déjà chargé le blob
+    const cardVideo = document.querySelector(`.clip-card[data-id="${clip.id}"] video`);
+    if (cardVideo && cardVideo.dataset.url) {
+      url = cardVideo.dataset.url;
+    } else {
+      const c = await ClipDB.get(clip.id);
+      if (!c) return;
+      url = URL.createObjectURL(c.blob);
+    }
+    playerCache[clip.id] = url;
+  }
+
+  video.src = url;
+  video.play().catch(() => {});
+}
+
+function closePlayerModal() {
+  const video = document.getElementById('modalVideo');
+  video.pause();
+  video.src = '';
+  document.getElementById('playerModal').classList.remove('open');
+  playerIdx = -1;
+}
+
+function stepPlayer(dir) {
+  const next = playerIdx + dir;
+  if (next < 0 || next >= filteredClips.length) return;
+  playerIdx = next;
+  showPlayerAt(playerIdx);
+}
+
+async function downloadCurrentFromPlayer() {
+  if (playerIdx < 0) return;
+  const clip = filteredClips[playerIdx];
+  if (!clip) return;
+  await downloadFromLib(clip.id);
+}
+
+// Fermer en cliquant l'overlay
+document.getElementById('playerModal').addEventListener('click', function(e) {
+  if (e.target === this) closePlayerModal();
+});
+
+// Raccourcis clavier
+document.addEventListener('keydown', e => {
+  if (!document.getElementById('playerModal').classList.contains('open')) return;
+  if (e.key === 'Escape')      closePlayerModal();
+  if (e.key === 'ArrowLeft')   stepPlayer(-1);
+  if (e.key === 'ArrowRight')  stepPlayer(1);
+});
+
+// ═══════════════════════════════════════════════════════════
+// Backup serveur
+// ═══════════════════════════════════════════════════════════
+
+// Map local_id → backup_id pour les clips déjà sauvegardés
+let backedUpMap = JSON.parse(localStorage.getItem('yt-clipper-backed-up') || '{}');
+
+function saveBackedUpMap() {
+  localStorage.setItem('yt-clipper-backed-up', JSON.stringify(backedUpMap));
+}
+
+function getBackupKey() {
+  return localStorage.getItem('yt-clipper-backup-key') || '';
+}
+
+function backupHeaders() {
+  return { 'X-Backup-Key': getBackupKey() };
+}
+
+// ── Clé secrète ─────────────────────────────────────────
+let _backupKeyResolve = null;
+
+function promptBackupKey() {
+  return new Promise(resolve => {
+    _backupKeyResolve = resolve;
+    const existing = getBackupKey();
+    document.getElementById('backupKeyInput').value = existing;
+    document.getElementById('backupKeyModal').classList.add('open');
+    setTimeout(() => document.getElementById('backupKeyInput').focus(), 80);
+  });
+}
+
+function closeBackupKeyModal(result = false) {
+  document.getElementById('backupKeyModal').classList.remove('open');
+  if (_backupKeyResolve) { _backupKeyResolve(result); _backupKeyResolve = null; }
+}
+
+function confirmBackupKey() {
+  const key = document.getElementById('backupKeyInput').value.trim();
+  if (!key) return;
+  localStorage.setItem('yt-clipper-backup-key', key);
+  closeBackupKeyModal(true);
+}
+
+document.getElementById('backupKeyInput')?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') confirmBackupKey();
+  if (e.key === 'Escape') closeBackupKeyModal(false);
+});
+
+// ── Upload vers le serveur ───────────────────────────────
+async function backupToServer(id) {
+  if (!BACKUP_ENABLED) return;
+
+  // Si déjà sauvegardé, proposer de voir les sauvegardes
+  if (backedUpMap[id]) {
+    if (confirm('Ce clip est déjà sauvegardé sur le serveur.\nVoulez-vous le sauvegarder à nouveau ?')) {
+      delete backedUpMap[id];
+      saveBackedUpMap();
+    } else return;
+  }
+
+  // Demander la clé si non enregistrée
+  if (!getBackupKey()) {
+    const ok = await promptBackupKey();
+    if (!ok) return;
+  }
+
+  const btn = document.getElementById(`backup-btn-${id}`);
+  if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
+
+  try {
+    const clip = await ClipDB.get(id);
+    if (!clip) throw new Error('Clip introuvable dans la bibliothèque locale.');
+
+    const form = new FormData();
+    form.append('clip',     clip.blob, clip.filename || 'clip.mp4');
+    form.append('title',    clip.title);
+    form.append('tags',     JSON.stringify(clip.tags || []));
+    form.append('duration', String(clip.duration || 0));
+    form.append('local_id', String(id));
+
+    const res = await fetch('/backup', { method: 'POST', headers: backupHeaders(), body: form });
+
+    if (res.status === 401) {
+      // Clé invalide — redemander
+      localStorage.removeItem('yt-clipper-backup-key');
+      const ok = await promptBackupKey();
+      if (!ok) return;
+      return backupToServer(id); // réessayer
+    }
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Erreur ${res.status}`);
+    }
+
+    const data = await res.json();
+    backedUpMap[id] = data.backup_id;
+    saveBackedUpMap();
+
+    if (btn) {
+      btn.textContent = '☁️✓';
+      btn.classList.add('backed-up');
+      btn.title = 'Sauvegardé sur le serveur';
+    }
+
+    // Rafraîchir la liste serveur
+    loadServerBackups();
+
+  } catch(e) {
+    alert('Erreur backup : ' + e.message);
+    if (btn) { btn.textContent = '☁️'; btn.disabled = false; }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// Marquer les boutons des clips déjà sauvegardés au chargement
+function syncBackupBadges() {
+  Object.keys(backedUpMap).forEach(localId => {
+    const btn = document.getElementById(`backup-btn-${localId}`);
+    if (btn) {
+      btn.textContent = '☁️✓';
+      btn.classList.add('backed-up');
+      btn.title = 'Sauvegardé sur le serveur';
+    }
+  });
+}
+
+// ── Liste des sauvegardes serveur ────────────────────────
+async function loadServerBackups() {
+  if (!BACKUP_ENABLED) return;
+
+  const grid = document.getElementById('serverBackupGrid');
+  if (!grid) return;
+
+  if (!getBackupKey()) {
+    grid.innerHTML = `<p style="color:#555;font-size:.82rem">
+      <button onclick="promptBackupKey().then(ok => ok && loadServerBackups())"
+        style="background:#1e1e28;border:1px solid #3a3a50;border-radius:8px;color:#7a8fff;padding:6px 12px;cursor:pointer;font-size:.78rem">
+        🔑 Entrer la clé pour afficher les sauvegardes
+      </button></p>`;
+    return;
+  }
+
+  grid.innerHTML = '<p style="color:#444;font-size:.82rem">Chargement…</p>';
+
+  try {
+    const res = await fetch('/backups', { headers: backupHeaders() });
+    if (res.status === 401) {
+      localStorage.removeItem('yt-clipper-backup-key');
+      grid.innerHTML = '<p style="color:#ff6060;font-size:.82rem">Clé invalide. <button onclick="promptBackupKey().then(ok => ok && loadServerBackups())" style="background:transparent;border:none;color:#7a8fff;cursor:pointer;text-decoration:underline">Réessayer</button></p>';
+      return;
+    }
+    const backups = await res.json();
+
+    if (!backups.length) {
+      grid.innerHTML = '<p style="color:#444;font-size:.82rem">Aucune sauvegarde sur le serveur.</p>';
+      return;
+    }
+
+    grid.innerHTML = '';
+    backups.forEach(b => grid.appendChild(createServerCard(b)));
+
+  } catch(e) {
+    grid.innerHTML = `<p style="color:#ff6060;font-size:.82rem">Erreur : ${e.message}</p>`;
+  }
+}
+
+function isAlreadyImported(backupId) {
+  // Vérifie que le clip local associé existe réellement dans allClips (évite les faux positifs
+  // si le clip local a été supprimé mais que backedUpMap est encore en localStorage)
+  return Object.entries(backedUpMap).some(([localId, bid]) =>
+    bid === backupId && allClips.some(c => c.id === parseInt(localId, 10))
+  );
+}
+
+function createServerCard(b) {
+  const card = document.createElement('div');
+  card.className = 'server-card';
+  card.dataset.backupId = b.id;
+  card.dataset.meta = JSON.stringify(b);
+
+  const alreadyImported = isAlreadyImported(b.id);
+
+  card.innerHTML = `
+    <div class="server-card-title" title="${escHtml(b.title)}">☁️ ${escHtml(b.title)}</div>
+    <div class="server-card-meta">
+      ${fmtDuration(b.duration)} · ${fmtSize(b.size)} · ${fmtDate(b.backed_up_at)}
+    </div>
+    <div class="server-card-tags">
+      ${(b.tags || []).map(t => `<span class="tag-pill" style="cursor:default">#${escHtml(t)}</span>`).join('')}
+    </div>
+    <div class="server-card-actions">
+      <button class="card-btn card-btn-import" id="import-btn-${b.id}"
+        onclick="importFromServer('${b.id}', this)"
+        ${alreadyImported ? 'disabled' : ''}
+        title="Ajouter dans la bibliothèque locale">
+        ${alreadyImported ? '✓ En bibliothèque' : '📥 Importer'}
+      </button>
+      <button class="card-btn" onclick="downloadServerBackup('${b.id}')" title="Télécharger le fichier">⬇</button>
+      <button class="card-btn card-btn-danger" onclick="deleteServerBackup('${b.id}', this)" title="Supprimer du serveur">🗑</button>
+    </div>`;
+
+  if (alreadyImported) {
+    const btn = card.querySelector(`#import-btn-${b.id}`);
+    btn.style.color = '#2ecc71';
+    btn.style.borderColor = '#1a5a30';
+  }
+
+  return card;
+}
+
+async function importFromServer(backupId, btn) {
+  btn.disabled = true;
+  btn.textContent = '⏳ Import…';
+
+  try {
+    const res = await fetch(`/backup/${backupId}/download`, { headers: backupHeaders() });
+    if (res.status === 401) {
+      localStorage.removeItem('yt-clipper-backup-key');
+      alert('Clé invalide. Veuillez relancer l\'import.');
+      btn.textContent = '📥 Importer';
+      btn.disabled = false;
+      return;
+    }
+    if (!res.ok) throw new Error(`Erreur serveur (${res.status})`);
+
+    const blob = await res.blob();
+
+    // Récupérer les métadonnées stockées sur la carte
+    const card = btn.closest('.server-card');
+    const meta = card ? JSON.parse(card.dataset.meta || '{}') : {};
+
+    const localId = await ClipDB.save(blob, {
+      title:    meta.title    || 'clip',
+      filename: meta.filename || 'clip.mp4',
+      tags:     meta.tags     || [],
+      duration: meta.duration || 0,
+    });
+
+    // Mémoriser l'association local ↔ backup pour éviter les doublons
+    backedUpMap[localId] = backupId;
+    saveBackedUpMap();
+
+    // Rafraîchir la grille locale en réinitialisant les filtres pour que le clip soit visible
+    activeTag   = '__all__';
+    searchQuery = '';
+    document.getElementById('searchInput').value = '';
+    await loadClips();   // buildTagFilters() + applyFilters() inclus
+    syncBackupBadges();
+    updateStorageInfo();
+
+    // Faire défiler jusqu'à la grille locale pour que l'utilisateur voie le clip importé
+    document.getElementById('clipGrid').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    btn.textContent = '✓ En bibliothèque';
+    btn.style.color = '#2ecc71';
+    btn.style.borderColor = '#1a5a30';
+
+  } catch(e) {
+    alert('Erreur lors de l\'import : ' + e.message);
+    btn.textContent = '📥 Importer';
+    btn.disabled = false;
+  }
+}
+
+async function downloadServerBackup(backupId) {
+  const url = `/backup/${backupId}/download`;
+  const a = document.createElement('a');
+  // On passe la clé en query param car les liens <a> ne supportent pas les headers custom
+  // À la place, on fetch le blob puis on crée un ObjectURL
+  try {
+    const res = await fetch(url, { headers: backupHeaders() });
+    if (!res.ok) { alert('Erreur téléchargement.'); return; }
+    const blob = await res.blob();
+    const cd = res.headers.get('Content-Disposition') || '';
+    const match = cd.match(/filename="?([^";]+)"?/);
+    const filename = match ? match[1] : 'clip.mp4';
+    const objUrl = URL.createObjectURL(blob);
+    a.href = objUrl; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(objUrl), 15000);
+  } catch(e) {
+    alert('Erreur : ' + e.message);
+  }
+}
+
+async function deleteServerBackup(backupId, btn) {
+  if (!confirm('Supprimer cette sauvegarde du serveur ?')) return;
+  try {
+    const res = await fetch(`/backup/${backupId}`, { method: 'DELETE', headers: backupHeaders() });
+    if (!res.ok) { alert('Erreur suppression.'); return; }
+    // Retirer la carte
+    const card = document.querySelector(`.server-card[data-backup-id="${backupId}"]`);
+    card?.remove();
+    // Nettoyer backedUpMap si besoin
+    Object.keys(backedUpMap).forEach(lid => {
+      if (backedUpMap[lid] === backupId) {
+        delete backedUpMap[lid];
+        const backupBtn = document.getElementById(`backup-btn-${lid}`);
+        if (backupBtn) {
+          backupBtn.textContent = '☁️';
+          backupBtn.classList.remove('backed-up');
+          backupBtn.title = 'Sauvegarder sur le serveur';
+        }
+      }
+    });
+    saveBackedUpMap();
+    // Vérifier si la grille est vide
+    const grid = document.getElementById('serverBackupGrid');
+    if (grid && !grid.querySelector('.server-card')) {
+      grid.innerHTML = '<p style="color:#444;font-size:.82rem">Aucune sauvegarde sur le serveur.</p>';
+    }
+  } catch(e) {
+    alert('Erreur : ' + e.message);
+  }
+}
+</script>
+</body>
+</html>

@@ -1,6 +1,9 @@
+import os
 import re
 import json
 import uuid
+import shutil
+import datetime
 import subprocess
 import threading
 import time
@@ -13,9 +16,23 @@ from flask import (
 import yt_dlp
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 512 * 1024 * 1024  # 512 MB (pour les uploads de montage)
 
 DOWNLOADS_DIR = Path(__file__).parent / "downloads"
 DOWNLOADS_DIR.mkdir(exist_ok=True)
+
+# ── Backup serveur (optionnel) ────────────────────────────────────────────────
+# Définissez la variable d'environnement YT_CLIPPER_BACKUP_SECRET pour activer.
+# Ex : export YT_CLIPPER_BACKUP_SECRET="mon-mot-de-passe-secret"
+BACKUP_SECRET    = os.environ.get("YT_CLIPPER_BACKUP_SECRET", "").strip()
+SERVER_LIBRARY   = Path(__file__).parent / "server_library"
+if BACKUP_SECRET:
+    SERVER_LIBRARY.mkdir(exist_ok=True)
+
+
+def _check_backup_key() -> bool:
+    key = request.headers.get("X-Backup-Key", "").strip()
+    return bool(BACKUP_SECRET) and key == BACKUP_SECRET
 
 job_states: dict = {}
 jobs_lock = threading.Lock()
@@ -338,6 +355,161 @@ def download(job_id):
         as_attachment=True,
         download_name=download_name,
     )
+
+
+@app.route("/library")
+def library():
+    return render_template("library.html", backup_enabled=bool(BACKUP_SECRET))
+
+
+@app.route("/merge", methods=["POST"])
+def merge():
+    clips = request.files.getlist("clips")
+    if len(clips) < 2:
+        return jsonify({"error": "Au moins 2 clips sont requis pour un montage."}), 400
+    if len(clips) > 20:
+        return jsonify({"error": "Maximum 20 clips par montage."}), 400
+
+    merge_id  = uuid.uuid4().hex
+    merge_dir = DOWNLOADS_DIR / f"merge_{merge_id}"
+    merge_dir.mkdir(exist_ok=True)
+
+    def _delayed_cleanup():
+        time.sleep(300)
+        shutil.rmtree(merge_dir, ignore_errors=True)
+
+    try:
+        # Sauvegarde des fichiers uploadés
+        paths = []
+        for i, clip in enumerate(clips):
+            p = merge_dir / f"{i:02d}.mp4"
+            clip.save(str(p))
+            paths.append(p)
+
+        # Fichier de liste pour le demuxer concat de ffmpeg
+        filelist = merge_dir / "filelist.txt"
+        filelist.write_text(
+            "\n".join(f"file '{p.resolve()}'" for p in paths),
+            encoding="utf-8",
+        )
+
+        output = merge_dir / "montage.mp4"
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", str(filelist),
+                "-c", "copy",
+                str(output),
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+
+        if result.returncode != 0:
+            stderr_msg = result.stderr.decode(errors="replace")[-600:]
+            shutil.rmtree(merge_dir, ignore_errors=True)
+            return jsonify({"error": f"Erreur ffmpeg : {stderr_msg}"}), 500
+
+        threading.Thread(target=_delayed_cleanup, daemon=True).start()
+        return send_file(output, mimetype="video/mp4", as_attachment=True, download_name="montage.mp4")
+
+    except Exception as exc:
+        shutil.rmtree(merge_dir, ignore_errors=True)
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── Backup serveur ────────────────────────────────────────────────────────────
+
+@app.route("/backup", methods=["POST"])
+def backup_clip():
+    if not BACKUP_SECRET:
+        return jsonify({"error": "Backup non activé sur ce serveur."}), 403
+    if not _check_backup_key():
+        return jsonify({"error": "Clé de backup invalide."}), 401
+
+    clip_file = request.files.get("clip")
+    if not clip_file:
+        return jsonify({"error": "Fichier manquant."}), 400
+
+    title    = sanitize_filename(request.form.get("title", "clip") or "clip")
+    tags     = json.loads(request.form.get("tags", "[]"))
+    duration = float(request.form.get("duration", 0) or 0)
+    local_id = request.form.get("local_id", "")
+
+    backup_id = uuid.uuid4().hex
+    mp4_path  = SERVER_LIBRARY / f"{backup_id}.mp4"
+    clip_file.save(str(mp4_path))
+
+    meta = {
+        "id":          backup_id,
+        "title":       title,
+        "filename":    f"{title}.mp4",
+        "tags":        tags,
+        "duration":    duration,
+        "local_id":    local_id,
+        "size":        mp4_path.stat().st_size,
+        "backed_up_at": datetime.datetime.utcnow().isoformat(),
+    }
+    (SERVER_LIBRARY / f"{backup_id}.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return jsonify({"backup_id": backup_id, "meta": meta})
+
+
+@app.route("/backups", methods=["GET"])
+def list_backups():
+    if not BACKUP_SECRET:
+        return jsonify({"error": "Backup non activé."}), 403
+    if not _check_backup_key():
+        return jsonify({"error": "Clé invalide."}), 401
+
+    backups = []
+    for f in sorted(SERVER_LIBRARY.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            backups.append(json.loads(f.read_text(encoding="utf-8")))
+        except Exception:
+            pass
+    return jsonify(backups)
+
+
+@app.route("/backup/<backup_id>", methods=["DELETE"])
+def delete_backup(backup_id):
+    if not BACKUP_SECRET:
+        return jsonify({"error": "Backup non activé."}), 403
+    if not _check_backup_key():
+        return jsonify({"error": "Clé invalide."}), 401
+    if not re.fullmatch(r"[a-f0-9]{32}", backup_id):
+        return jsonify({"error": "ID invalide."}), 400
+
+    (SERVER_LIBRARY / f"{backup_id}.mp4").unlink(missing_ok=True)
+    (SERVER_LIBRARY / f"{backup_id}.json").unlink(missing_ok=True)
+    return jsonify({"ok": True})
+
+
+@app.route("/backup/<backup_id>/download", methods=["GET"])
+def download_backup(backup_id):
+    if not BACKUP_SECRET:
+        return jsonify({"error": "Backup non activé."}), 403
+    if not _check_backup_key():
+        return jsonify({"error": "Clé invalide."}), 401
+    if not re.fullmatch(r"[a-f0-9]{32}", backup_id):
+        return jsonify({"error": "ID invalide."}), 400
+
+    mp4_path  = SERVER_LIBRARY / f"{backup_id}.mp4"
+    meta_path = SERVER_LIBRARY / f"{backup_id}.json"
+    if not mp4_path.exists():
+        return jsonify({"error": "Fichier introuvable."}), 404
+
+    download_name = "clip.mp4"
+    if meta_path.exists():
+        try:
+            download_name = json.loads(meta_path.read_text()).get("filename", "clip.mp4")
+        except Exception:
+            pass
+
+    return send_file(mp4_path, mimetype="video/mp4", as_attachment=True, download_name=download_name)
 
 
 if __name__ == "__main__":

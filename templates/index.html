@@ -261,6 +261,20 @@
       font-size: .85rem; color: #ff6b6b; line-height: 1.5;
     }
 
+    /* ── Library link ───────────────────────────────── */
+    .lib-link {
+      margin-left: auto;
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 6px 12px;
+      background: #1e1e28; border: 1px solid #3a3a50;
+      border-radius: 8px; color: #aaa;
+      font-size: .78rem; font-weight: 600;
+      letter-spacing: .04em; text-decoration: none;
+      transition: background .15s, border-color .15s, color .15s;
+      white-space: nowrap;
+    }
+    .lib-link:hover { background: #252535; border-color: #7a8fff; color: #7a8fff; }
+
     /* ── Filename + download ────────────────────────── */
     #filenameWrap { display: none; margin-top: 16px; }
     .filename-row {
@@ -281,14 +295,33 @@
       flex-shrink: 0; user-select: none;
     }
 
+    #tagsInput { margin-bottom: 0; }
+    .label-hint {
+      color: #444; font-size: .65rem; font-weight: 400;
+      text-transform: none; letter-spacing: 0; margin-left: 4px;
+    }
+
+    .clip-action-row { display: flex; gap: 10px; margin-top: 14px; }
+
     #downloadBtn {
-      display: none; width: 100%; margin-top: 14px; padding: 13px;
+      flex: 1; padding: 13px;
       background: linear-gradient(135deg, #2ecc71, #1a8a4a);
       border: none; border-radius: 12px;
       font-size: .93rem; font-weight: 700; color: #fff;
       cursor: pointer; transition: opacity .2s;
     }
-    #downloadBtn:hover { opacity: .88; }
+    #downloadBtn:hover:not(:disabled) { opacity: .88; }
+    #downloadBtn:disabled { opacity: .45; cursor: not-allowed; }
+
+    #saveLibBtn {
+      flex: 1; padding: 13px;
+      background: linear-gradient(135deg, #5a8fff, #3355cc);
+      border: none; border-radius: 12px;
+      font-size: .93rem; font-weight: 700; color: #fff;
+      cursor: pointer; transition: opacity .2s;
+    }
+    #saveLibBtn:hover:not(:disabled) { opacity: .88; }
+    #saveLibBtn:disabled { opacity: .45; cursor: not-allowed; }
 
     @media (max-width: 680px) {
       body { padding: 14px 10px 28px; }
@@ -313,7 +346,9 @@
         width: 100%;
         margin-top: 12px;
       }
-      #clipBtn, #downloadBtn { padding: 12px; }
+      #clipBtn { padding: 12px; }
+      .clip-action-row { flex-direction: column; }
+      #downloadBtn, #saveLibBtn { padding: 12px; width: 100%; }
     }
   </style>
 </head>
@@ -324,6 +359,7 @@
   <div class="logo">
     <div class="logo-icon">✂️</div>
     <h1>YouTube <span>Clipper</span></h1>
+    <a href="/library" class="lib-link">📚 Ma bibliothèque</a>
   </div>
 
   <!-- URL -->
@@ -402,9 +438,15 @@
       <input type="text" id="filenameInput" placeholder="nom_du_clip" spellcheck="false" />
       <span class="filename-ext">.mp4</span>
     </div>
+    <label for="tagsInput" style="margin-top:12px">
+      Tags<span class="label-hint">séparés par des virgules</span>
+    </label>
+    <input type="text" id="tagsInput" placeholder="sport, gaming, tuto…" />
+    <div class="clip-action-row">
+      <button id="downloadBtn" onclick="downloadClip()">⬇ Télécharger</button>
+      <button id="saveLibBtn" onclick="saveToLibrary()">📚 Ma bibliothèque</button>
+    </div>
   </div>
-
-  <button id="downloadBtn" onclick="downloadClip()">⬇ Télécharger le clip</button>
 </div>
 
 <script>
@@ -726,6 +768,7 @@ function parseTc(tc) {
 // ═══════════════════════════════════════════════════════════
 let currentJobId = null;
 let evtSource = null;
+let _clipBlobPromise = null;
 
 function resetProgress() {
   ['ph1','ph2','ph3'].forEach(id => { document.getElementById(id).className = 'phase-item'; });
@@ -738,9 +781,10 @@ function resetProgress() {
   document.getElementById('barStats').textContent = '';
   document.getElementById('statusText').textContent = 'Initialisation…';
   document.getElementById('errorBox').style.display = 'none';
-  document.getElementById('downloadBtn').style.display = 'none';
   document.getElementById('filenameWrap').style.display = 'none';
   document.getElementById('progressSection').style.display = 'block';
+  document.getElementById('tagsInput').value = '';
+  _clipBlobPromise = null;
 }
 
 function setPhaseActive(n) {
@@ -803,10 +847,9 @@ function handleState(state) {
     document.getElementById('barFill').style.background = 'linear-gradient(90deg, #1a5a30, #2ecc71)';
     document.getElementById('barPct').textContent = '100%';
     document.getElementById('barStats').textContent = 'Terminé !';
-    document.getElementById('statusText').textContent = 'Clip prêt — choisissez un nom et téléchargez.';
+    document.getElementById('statusText').textContent = 'Clip prêt — téléchargez ou sauvegardez dans votre bibliothèque.';
     if (state.video_title) document.getElementById('filenameInput').value = 'clip_' + state.video_title;
     document.getElementById('filenameWrap').style.display = 'block';
-    document.getElementById('downloadBtn').style.display = 'block';
     document.getElementById('clipBtn').disabled = false;
     if (evtSource) { evtSource.close(); evtSource = null; }
 
@@ -865,18 +908,78 @@ async function startClip() {
   };
 }
 
-function downloadClip() {
-  if (!currentJobId) return;
-  const rawName = document.getElementById('filenameInput').value.trim();
-  const qs = rawName ? `?filename=${encodeURIComponent(rawName)}` : '';
-  window.location.href = `/download/${currentJobId}${qs}`;
-  setTimeout(() => {
-    document.getElementById('downloadBtn').style.display = 'none';
-    document.getElementById('filenameWrap').style.display = 'none';
-    document.getElementById('progressSection').style.display = 'none';
-    currentJobId = null;
-  }, 1500);
+// ═══════════════════════════════════════════════════════════
+// Gestion du blob : récupéré une seule fois puis réutilisé
+// ═══════════════════════════════════════════════════════════
+function fetchClipBlob() {
+  if (!_clipBlobPromise) {
+    if (!currentJobId) return Promise.reject(new Error('Pas de clip généré.'));
+    const rawName = document.getElementById('filenameInput').value.trim();
+    const qs = rawName ? `?filename=${encodeURIComponent(rawName)}` : '';
+    _clipBlobPromise = fetch(`/download/${currentJobId}${qs}`)
+      .then(r => {
+        if (!r.ok) throw new Error('Clip introuvable ou expiré. Veuillez en générer un nouveau.');
+        return r.blob();
+      });
+  }
+  return _clipBlobPromise;
+}
+
+async function downloadClip() {
+  const btn = document.getElementById('downloadBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Récupération…';
+  try {
+    const blob = await fetchClipBlob();
+    const rawName = document.getElementById('filenameInput').value.trim();
+    const filename = (rawName || 'clip') + '.mp4';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 15000);
+    btn.textContent = '✓ Téléchargé';
+    setTimeout(() => { btn.textContent = '⬇ Télécharger'; btn.disabled = false; }, 2500);
+  } catch(e) {
+    btn.textContent = '⬇ Télécharger';
+    btn.disabled = false;
+    alert('Erreur : ' + e.message);
+  }
+}
+
+async function saveToLibrary() {
+  const btn = document.getElementById('saveLibBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Sauvegarde…';
+  try {
+    const blob = await fetchClipBlob();
+    const rawName = document.getElementById('filenameInput').value.trim();
+    const tagsRaw = document.getElementById('tagsInput').value;
+    const tags = tagsRaw.split(',').map(t => t.trim()).filter(Boolean);
+    const clipDuration = videoDuration
+      ? Math.round(parseFloat(slEnd.value) - parseFloat(slStart.value))
+      : 0;
+    await ClipDB.save(blob, {
+      title: rawName || 'clip',
+      filename: (rawName || 'clip') + '.mp4',
+      tags,
+      duration: clipDuration,
+    });
+    btn.textContent = '✓ Sauvegardé !';
+    btn.style.background = 'linear-gradient(135deg, #2ecc71, #1a8a4a)';
+    setTimeout(() => {
+      btn.textContent = '📚 Ma bibliothèque';
+      btn.style.background = '';
+      btn.disabled = false;
+    }, 2500);
+  } catch(e) {
+    btn.textContent = '📚 Ma bibliothèque';
+    btn.style.background = '';
+    btn.disabled = false;
+    alert('Erreur lors de la sauvegarde : ' + e.message);
+  }
 }
 </script>
+<script src="/static/js/clipdb.js"></script>
 </body>
 </html>
