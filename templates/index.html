@@ -410,7 +410,7 @@
       <input type="text" id="endInput" placeholder="1:45 ou « fin »" />
     </div>
   </div>
-  <p class="hint" id="mainHint">Format : MM:SS, HH:MM:SS ou secondes — clip max 10 min.</p>
+  <p class="hint" id="mainHint">Format : MM:SS, HH:MM:SS ou secondes.</p>
 
   <button id="clipBtn" onclick="startClip()">Générer le clip</button>
 
@@ -494,7 +494,7 @@ function tryLoadVideo(url) {
   ps.style.display = 'block';
   document.getElementById('playerOverlay').style.display = 'flex';
   document.getElementById('tlPlayhead').style.display = 'none';
-  document.getElementById('mainHint').textContent = 'Glissez les curseurs ou tapez les timecodes — clip max 10 min.';
+  document.getElementById('mainHint').textContent = 'Glissez les curseurs ou tapez les timecodes.';
 
   loadYouTubeAPI();
   waitAndCreate(videoId);

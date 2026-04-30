@@ -121,9 +121,7 @@ def run_clip_job(job_id: str, url: str, start_s: float, end_s: float | None, cli
     if end_s <= start_s:
         update_job(job_id, phase="error", error="Le timecode de fin doit être supérieur au début.")
         return
-    if (end_s - start_s) > 600:
-        update_job(job_id, phase="error", error="La durée du clip ne peut pas dépasser 10 minutes.")
-        return
+
 
     duration = end_s - start_s
 
@@ -285,8 +283,6 @@ def clip():
             end_s = parse_timecode(end_tc)
             if end_s <= start_s:
                 return jsonify({"error": "Le timecode de fin doit être supérieur au début."}), 400
-            if (end_s - start_s) > 600:
-                return jsonify({"error": "La durée du clip ne peut pas dépasser 10 minutes."}), 400
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
