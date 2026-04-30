@@ -99,30 +99,68 @@ def sanitize_filename(name: str) -> str:
     return name[:80] or "clip"
 
 
+_YTDLP_FMT_PREF = (
+    # Paysage ≤1080p OU portrait type Short (largeur ≤1080). Puis repli sans plafond / flux unique.
+    "bestvideo[height<=1080]+bestaudio/"
+    "bestvideo[width<=1080]+bestaudio/"
+    "bestvideo+bestaudio/"
+    "best[height<=1080]/"
+    "best[width<=1080]/"
+    "best"
+)
+
+
+def _youtube_extract_info(url: str) -> dict:
+    """Extraction yt-dlp avec plusieurs stratégies.
+
+    Le client YouTube « web » seul peut ne proposer aucun format compatible avec la chaîne
+    de sélection (souvent vu sur VPS / avec cookies). Les clients android_creator ou
+    tv_embedded débloquent en général les flux séparés vidéo+audio.
+    """
+    cookie = _yt_dlp_cookie_opts()
+    base: dict = {"quiet": True, "no_warnings": True, **cookie}
+    attempts: list[dict] = [
+        {**base, "format": _YTDLP_FMT_PREF},
+        {
+            **base,
+            "format": _YTDLP_FMT_PREF,
+            "extractor_args": {"youtube": {"player_client": ["android_creator"]}},
+        },
+        {
+            **base,
+            "format": _YTDLP_FMT_PREF,
+            "extractor_args": {"youtube": {"player_client": ["tv_embedded"]}},
+        },
+        {
+            **base,
+            "format": "bv*+ba/b",
+            "extractor_args": {"youtube": {"player_client": ["android_creator"]}},
+        },
+        {
+            **base,
+            "format": "best",
+            "extractor_args": {"youtube": {"player_client": ["android"]}},
+        },
+    ]
+
+    last_exc: Exception | None = None
+    for opts in attempts:
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                return ydl.extract_info(url, download=False)
+        except Exception as exc:
+            last_exc = exc
+    raise last_exc if last_exc else RuntimeError("_youtube_extract_info: aucune tentative")
+
+
 # ── Background job ────────────────────────────────────────────────────────────
 
 def run_clip_job(job_id: str, url: str, start_s: float, end_s: float | None, clip_path: Path):
     # Phase 1 – récupération des URLs de stream (et durée si end_s == None)
     update_job(job_id, phase="extracting")
 
-    ydl_opts = {
-        # Paysage ≤1080p OU portrait type Short (largeur ≤1080). Sinon fusion sans plafond puis meilleur flux unique.
-        # (height<=1080 seul exclut les Shorts 1080×1920.)
-        "format": (
-            "bestvideo[height<=1080]+bestaudio/"
-            "bestvideo[width<=1080]+bestaudio/"
-            "bestvideo+bestaudio/"
-            "best[height<=1080]/"
-            "best[width<=1080]/"
-            "best"
-        ),
-        "quiet": True,
-        "no_warnings": True,
-        **_yt_dlp_cookie_opts(),
-    }
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+        info = _youtube_extract_info(url)
     except Exception as e:
         update_job(job_id, phase="error", error=f"Erreur YouTube : {e}")
         return
