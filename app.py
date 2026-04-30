@@ -29,6 +29,17 @@ SERVER_LIBRARY   = Path(__file__).parent / "server_library"
 if BACKUP_SECRET:
     SERVER_LIBRARY.mkdir(exist_ok=True)
 
+# Cookies YouTube pour yt-dlp (optionnel). Si le fichier existe, il est passé à yt-dlp.
+# Ex. VPS : YT_DLP_COOKIES_FILE=/home/clipper/cookies.txt
+def _yt_dlp_cookie_opts() -> dict:
+    raw = os.environ.get("YT_DLP_COOKIES_FILE", "").strip()
+    if not raw:
+        return {}
+    path = Path(raw).expanduser()
+    if path.is_file():
+        return {"cookiefile": str(path.resolve())}
+    return {}
+
 
 def _check_backup_key() -> bool:
     key = request.headers.get("X-Backup-Key", "").strip()
@@ -98,6 +109,7 @@ def run_clip_job(job_id: str, url: str, start_s: float, end_s: float | None, cli
         "format": "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best",
         "quiet": True,
         "no_warnings": True,
+        **_yt_dlp_cookie_opts(),
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
