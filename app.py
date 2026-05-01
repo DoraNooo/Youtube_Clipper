@@ -169,6 +169,16 @@ def _ffmpeg_codec_args(vcodec: str, acodec: str) -> tuple[list, list]:
     return v_args, a_args
 
 
+try:
+    from yt_dlp.utils import download_range_func as _ytdlp_range_func
+except ImportError:
+    # Polyfill pour les versions plus anciennes de yt-dlp
+    def _ytdlp_range_func(_chapters, ranges):  # type: ignore[misc]
+        def _inner(_info, _ydl):
+            return [{"start_time": s, "end_time": e} for s, e in ranges]
+        return _inner
+
+
 _YTDLP_FMT_PREF = (
     # H.264 + AAC en priorité → copy mode instantané sur VPS
     "bestvideo[vcodec^=avc1][height<=1080]+bestaudio[acodec^=mp4a]/"
@@ -217,12 +227,79 @@ def _youtube_extract_info(url: str) -> dict:
     raise last_exc if last_exc else RuntimeError("_youtube_extract_info: aucune tentative")
 
 
+def _ytdlp_download_section(url: str, start_s: float, end_s: float, job_id: str) -> Path:
+    """Télécharge uniquement la section [start_s, end_s] via yt-dlp.
+
+    yt-dlp gère le throttling YouTube, les retries et les segments adaptatifs
+    bien mieux que ffmpeg en lecture directe depuis les CDN.
+    Retourne le chemin du fichier téléchargé (mp4 ou mkv selon disponibilité).
+    """
+    cookie = _yt_dlp_cookie_opts()
+    node   = _yt_dlp_node_opts()
+    out_tmpl = str(DOWNLOADS_DIR / f"{job_id}_raw.%(ext)s")
+
+    # Suivi de progression : yt-dlp peut télécharger plusieurs flux (vidéo + audio)
+    # en parallèle, on cumule les bytes pour une barre de progression globale.
+    _totals: dict = {}
+    _dones:  dict = {}
+
+    def _hook(d: dict):
+        key = d.get("info_dict", {}).get("format_id", d.get("filename", ""))
+        if d["status"] == "downloading":
+            tb = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+            db = d.get("downloaded_bytes") or 0
+            if tb:
+                _totals[key] = tb
+            _dones[key] = db
+            total = sum(_totals.values()) or 1
+            done  = sum(_dones.values())
+            pct   = min(99, int(done / total * 100))
+            spd   = d.get("speed") or 0
+            spd_str = f"{spd / 1_048_576:.1f} MB/s" if spd else ""
+            update_job(job_id, phase="downloading", pct=pct, speed=spd_str)
+        elif d["status"] == "error":
+            update_job(job_id, phase="downloading", pct=0, speed="")
+
+    opts: dict = {
+        **cookie, **node,
+        "format":                _YTDLP_FMT_PREF,
+        "outtmpl":               out_tmpl,
+        "download_ranges":       _ytdlp_range_func(None, [(start_s, end_s)]),
+        "force_keyframes_at_cuts": True,
+        "merge_output_format":   "mp4",
+        "progress_hooks":        [_hook],
+        "quiet":                 True,
+        "no_warnings":           True,
+    }
+    if not _yt_dlp_verbose():
+        opts["logger"] = _YtdlpQuietLogger()
+
+    # Vérifier annulation avant de lancer
+    state = get_job(job_id)
+    if state and state.get("phase") == "cancelled":
+        raise RuntimeError("Job annulé")
+
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        ydl.download([url])
+
+    # yt-dlp remplace %(ext)s → chercher le fichier produit
+    candidates = [
+        p for p in DOWNLOADS_DIR.glob(f"{job_id}_raw.*")
+        if p.suffix not in (".part", ".ytdl", ".json", ".tmp")
+    ]
+    if not candidates:
+        raise RuntimeError("yt-dlp n'a produit aucun fichier de sortie.")
+    mp4_files = [p for p in candidates if p.suffix == ".mp4"]
+    return mp4_files[0] if mp4_files else candidates[0]
+
+
 # ── Background job ────────────────────────────────────────────────────────────
 
 def run_clip_job(job_id: str, url: str, start_s: float, end_s: float | None, clip_path: Path):
-    # Phase 1 – récupération des URLs de stream (et durée si end_s == None)
-    update_job(job_id, phase="extracting")
+    raw_path: Path | None = None
 
+    # ── Phase 1 : Analyse ────────────────────────────────────────────────────
+    update_job(job_id, phase="extracting")
     try:
         info = _youtube_extract_info(url)
     except Exception as e:
@@ -233,11 +310,9 @@ def run_clip_job(job_id: str, url: str, start_s: float, end_s: float | None, cli
         update_job(job_id, phase="error", error=msg)
         return
 
-    # Stocker le titre sanitisé pour le nom de fichier par défaut
     raw_title = info.get("title") or "clip"
     update_job(job_id, video_title=sanitize_filename(raw_title))
 
-    # Résolution de la borne de fin ("fin" → durée réelle de la vidéo)
     if end_s is None:
         video_duration = info.get("duration")
         if not video_duration:
@@ -249,57 +324,53 @@ def run_clip_job(job_id: str, url: str, start_s: float, end_s: float | None, cli
         update_job(job_id, phase="error", error="Le timecode de fin doit être supérieur au début.")
         return
 
-
     duration = end_s - start_s
 
-    # Construction de la commande ffmpeg
-    ffmpeg_cmd = ["ffmpeg", "-y"]
+    # Codecs source pour décider copy vs re-encode en phase 3
     requested = info.get("requested_formats") or []
-
-    def time_args(s: float, e: float) -> list:
-        return ["-ss", str(s), "-to", str(e)]
-
     if len(requested) >= 2:
-        vfmt, afmt = requested[0], requested[1]
-        vcodec, acodec = vfmt.get("vcodec", ""), afmt.get("acodec", "")
-        ffmpeg_cmd += [
-            "-headers", header_str(vfmt, info),
-            *time_args(start_s, end_s), "-i", vfmt["url"],
-            "-headers", header_str(afmt, info),
-            *time_args(start_s, end_s), "-i", afmt["url"],
-        ]
+        vcodec = requested[0].get("vcodec", "")
+        acodec = requested[1].get("acodec", "")
     else:
-        stream_url = info.get("url", "")
-        if not stream_url:
-            update_job(job_id, phase="error", error="Impossible de récupérer l'URL du stream.")
-            return
         vcodec = info.get("vcodec", "")
         acodec = info.get("acodec", "")
-        ffmpeg_cmd += [
-            "-headers", header_str(info, {}),
-            *time_args(start_s, end_s), "-i", stream_url,
-        ]
 
+    # ── Phase 2 : Téléchargement (yt-dlp gère le throttling YouTube) ─────────
+    update_job(job_id, phase="downloading", pct=0, speed="")
+    try:
+        raw_path = _ytdlp_download_section(url, start_s, end_s, job_id)
+    except Exception as e:
+        # Vérifier si c'est une annulation volontaire
+        current = get_job(job_id)
+        if current and current.get("phase") == "cancelled":
+            return
+        update_job(job_id, phase="error", error=f"Erreur téléchargement : {e}")
+        return
+
+    # Annulation entre download et encode
+    current = get_job(job_id)
+    if current and current.get("phase") == "cancelled":
+        raw_path.unlink(missing_ok=True)
+        return
+
+    # ── Phase 3 : Encodage depuis fichier local (CPU à fond, pas de réseau) ──
     v_args, a_args = _ffmpeg_codec_args(vcodec, acodec)
-
-    # Fichiers temporaires : progression + stderr (évite les deadlocks de pipe)
     progress_file = DOWNLOADS_DIR / f"{job_id}_progress.txt"
     stderr_file   = DOWNLOADS_DIR / f"{job_id}_stderr.txt"
 
-    ffmpeg_cmd += [
-        *v_args,
-        *a_args,
+    ffmpeg_cmd = [
+        "ffmpeg", "-y",
+        "-i", str(raw_path),
+        *v_args, *a_args,
         "-movflags", "+faststart",
         "-progress", str(progress_file),
         "-nostats",
         str(clip_path),
     ]
 
-    # Phase 2 – encodage avec progression en temps réel
     update_job(job_id, phase="encoding", pct=0, speed="", bitrate="")
 
     def read_progress() -> dict:
-        """Lit le dernier bloc complet du fichier de progression ffmpeg."""
         try:
             content = progress_file.read_text(errors="replace")
         except (FileNotFoundError, OSError):
@@ -307,7 +378,6 @@ def run_clip_job(job_id: str, url: str, start_s: float, end_s: float | None, cli
         blocks = content.split("progress=")
         if len(blocks) < 2:
             return {}
-        # blocks[-2] = dernier bloc complet (avant le dernier "progress=")
         result: dict = {}
         for line in blocks[-2].splitlines():
             if "=" in line:
@@ -323,12 +393,9 @@ def run_clip_job(job_id: str, url: str, start_s: float, end_s: float | None, cli
                 stdout=subprocess.DEVNULL,
                 stderr=stderr_fh,
             )
-        # Stocker le process pour permettre l'annulation via /cancel/<job_id>
         update_job(job_id, _pid=process.pid)
 
-        # Boucle : lire la progression PUIS vérifier si le process est fini.
         while True:
-            # Annulation demandée depuis la route /cancel
             current = get_job(job_id)
             if current and current.get("phase") == "cancelled":
                 process.terminate()
@@ -366,7 +433,6 @@ def run_clip_job(job_id: str, url: str, start_s: float, end_s: float | None, cli
 
         if process.returncode == 0:
             update_job(job_id, phase="done", pct=100)
-            # Auto-save dans la bibliothèque serveur si activée
             _autosave_to_library(job_id, clip_path, info, duration)
         else:
             try:
@@ -379,6 +445,8 @@ def run_clip_job(job_id: str, url: str, start_s: float, end_s: float | None, cli
     finally:
         progress_file.unlink(missing_ok=True)
         stderr_file.unlink(missing_ok=True)
+        if raw_path:
+            raw_path.unlink(missing_ok=True)
 
 
 def _autosave_to_library(job_id: str, clip_path: Path, info: dict, duration: float):

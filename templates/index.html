@@ -419,9 +419,11 @@
     <div class="phases">
       <div class="phase-item" id="ph1"><div class="phase-dot" id="dot1"></div><span class="phase-label">Analyse</span></div>
       <div class="phase-connector" id="con1"></div>
-      <div class="phase-item" id="ph2"><div class="phase-dot" id="dot2"></div><span class="phase-label">Encodage</span></div>
+      <div class="phase-item" id="ph2"><div class="phase-dot" id="dot2"></div><span class="phase-label">Téléchargement</span></div>
       <div class="phase-connector" id="con2"></div>
-      <div class="phase-item" id="ph3"><div class="phase-dot" id="dot3"></div><span class="phase-label">Prêt</span></div>
+      <div class="phase-item" id="ph3"><div class="phase-dot" id="dot3"></div><span class="phase-label">Encodage</span></div>
+      <div class="phase-connector" id="con3"></div>
+      <div class="phase-item" id="ph4"><div class="phase-dot" id="dot4"></div><span class="phase-label">Prêt</span></div>
     </div>
     <div id="statusText">Initialisation…</div>
     <div id="barWrap">
@@ -772,9 +774,9 @@ let evtSource = null;
 let _clipBlobPromise = null;
 
 function resetProgress() {
-  ['ph1','ph2','ph3'].forEach(id => { document.getElementById(id).className = 'phase-item'; });
-  ['con1','con2'].forEach(id => { document.getElementById(id).className = 'phase-connector'; });
-  ['dot1','dot2','dot3'].forEach(id => { document.getElementById(id).textContent = ''; });
+  ['ph1','ph2','ph3','ph4'].forEach(id => { document.getElementById(id).className = 'phase-item'; });
+  ['con1','con2','con3'].forEach(id => { document.getElementById(id).className = 'phase-connector'; });
+  ['dot1','dot2','dot3','dot4'].forEach(id => { document.getElementById(id).textContent = ''; });
   document.getElementById('barWrap').style.display = 'none';
   document.getElementById('barFill').style.width = '0%';
   document.getElementById('barFill').style.background = 'linear-gradient(90deg, #1a5a7a, #4a9eff)';
@@ -792,13 +794,13 @@ function resetProgress() {
 }
 
 function setPhaseActive(n) {
-  for (let i = 1; i <= 3; i++) {
+  for (let i = 1; i <= 4; i++) {
     const ph = document.getElementById(`ph${i}`);
     const dot = document.getElementById(`dot${i}`);
-    if (i < n)      { ph.className = 'phase-item done';   dot.textContent = '✓'; }
+    if (i < n)        { ph.className = 'phase-item done';   dot.textContent = '✓'; }
     else if (i === n) { ph.className = 'phase-item active'; dot.textContent = ''; }
-    else             { ph.className = 'phase-item';         dot.textContent = ''; }
-    if (i <= 2) {
+    else              { ph.className = 'phase-item';         dot.textContent = ''; }
+    if (i <= 3) {
       document.getElementById(`con${i}`).className =
         'phase-connector' + (i < n ? ' done' : i === n ? ' active' : '');
     }
@@ -806,12 +808,13 @@ function setPhaseActive(n) {
 }
 
 function setAllDone() {
-  for (let i = 1; i <= 3; i++) {
+  for (let i = 1; i <= 4; i++) {
     document.getElementById(`ph${i}`).className = 'phase-item done';
     document.getElementById(`dot${i}`).textContent = '✓';
   }
-  document.getElementById('con1').className = 'phase-connector done';
-  document.getElementById('con2').className = 'phase-connector done';
+  ['con1','con2','con3'].forEach(id => {
+    document.getElementById(id).className = 'phase-connector done';
+  });
 }
 
 function eta(elapsedS, pct, speed) {
@@ -831,8 +834,19 @@ function handleState(state) {
     document.getElementById('statusText').textContent = 'Analyse de la vidéo YouTube…';
     document.getElementById('cancelBtn').style.display = 'inline-block';
 
-  } else if (phase === 'encoding') {
+  } else if (phase === 'downloading') {
     setPhaseActive(2);
+    const pct = state.pct || 0;
+    document.getElementById('barWrap').style.display = 'block';
+    document.getElementById('barFill').style.width = pct + '%';
+    document.getElementById('barPct').textContent = pct + '%';
+    const spd = state.speed ? `⬇ ${state.speed}` : '';
+    document.getElementById('barStats').textContent = spd;
+    document.getElementById('statusText').textContent = 'Téléchargement du clip depuis YouTube…';
+    document.getElementById('cancelBtn').style.display = 'inline-block';
+
+  } else if (phase === 'encoding') {
+    setPhaseActive(3);
     const pct = state.pct || 0;
     document.getElementById('barWrap').style.display = 'block';
     document.getElementById('barFill').style.width = pct + '%';
@@ -847,6 +861,7 @@ function handleState(state) {
     document.getElementById('cancelBtn').style.display = 'inline-block';
 
   } else if (phase === 'cancelled') {
+
     document.getElementById('cancelBtn').style.display = 'none';
     document.getElementById('progressSection').style.display = 'none';
     document.getElementById('errorBox').style.display = 'block';
