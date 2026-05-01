@@ -1186,6 +1186,13 @@ function confirmBackupKey() {
   const key = document.getElementById('backupKeyInput').value.trim();
   if (!key) return;
   localStorage.setItem('yt-clipper-backup-key', key);
+  // Ouvre une session Flask côté serveur pour permettre l'auto-save
+  fetch('/auth', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key }),
+    credentials: 'same-origin',
+  }).catch(() => {});
   closeBackupKeyModal(true);
 }
 

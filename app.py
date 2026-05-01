@@ -12,11 +12,9 @@ from pathlib import Path
 from flask import (
     Flask, render_template, request, jsonify,
     send_file, after_this_request, Response, stream_with_context,
+    session,
 )
 import yt_dlp
-
-app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 512 * 1024 * 1024  # 512 MB (pour les uploads de montage)
 
 DOWNLOADS_DIR = Path(__file__).parent / "downloads"
 DOWNLOADS_DIR.mkdir(exist_ok=True)
@@ -28,6 +26,11 @@ BACKUP_SECRET    = os.environ.get("YT_CLIPPER_BACKUP_SECRET", "").strip()
 SERVER_LIBRARY   = Path(__file__).parent / "server_library"
 if BACKUP_SECRET:
     SERVER_LIBRARY.mkdir(exist_ok=True)
+
+app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 512 * 1024 * 1024  # 512 MB (pour les uploads de montage)
+# SECRET_KEY stable dérivée de BACKUP_SECRET ; si absent, sessions éphémères (pas grave)
+app.secret_key = (BACKUP_SECRET + "_flask_session").encode() if BACKUP_SECRET else None
 
 # Cookies YouTube pour yt-dlp (optionnel). Si le fichier existe, il est passé à yt-dlp.
 # Ex. VPS : YT_DLP_COOKIES_FILE=/home/clipper/cookies.txt
@@ -316,15 +319,26 @@ def run_clip_job(job_id: str, url: str, start_s: float, end_s: float | None, cli
         with open(stderr_file, "w") as stderr_fh:
             process = subprocess.Popen(
                 ffmpeg_cmd,
-                stdin=subprocess.DEVNULL,   # ← évite le blocage sur stdin
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
-                stderr=stderr_fh,           # ← fichier = pas de deadlock pipe
+                stderr=stderr_fh,
             )
-        # stderr_fh est fermé côté Python ; ffmpeg garde son propre fd
+        # Stocker le process pour permettre l'annulation via /cancel/<job_id>
+        update_job(job_id, _pid=process.pid)
 
         # Boucle : lire la progression PUIS vérifier si le process est fini.
-        # Cet ordre garantit qu'on lit le fichier même pour les vidéos très courtes.
         while True:
+            # Annulation demandée depuis la route /cancel
+            current = get_job(job_id)
+            if current and current.get("phase") == "cancelled":
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                clip_path.unlink(missing_ok=True)
+                return
+
             prog = read_progress()
             if prog:
                 try:
@@ -352,6 +366,8 @@ def run_clip_job(job_id: str, url: str, start_s: float, end_s: float | None, cli
 
         if process.returncode == 0:
             update_job(job_id, phase="done", pct=100)
+            # Auto-save dans la bibliothèque serveur si activée
+            _autosave_to_library(job_id, clip_path, info, duration)
         else:
             try:
                 stderr_out = stderr_file.read_text()[-800:]
@@ -363,6 +379,36 @@ def run_clip_job(job_id: str, url: str, start_s: float, end_s: float | None, cli
     finally:
         progress_file.unlink(missing_ok=True)
         stderr_file.unlink(missing_ok=True)
+
+
+def _autosave_to_library(job_id: str, clip_path: Path, info: dict, duration: float):
+    """Copie le clip dans server_library uniquement si le job a été lancé depuis une session authentifiée."""
+    state = get_job(job_id)
+    if not BACKUP_SECRET or not clip_path.exists() or not (state and state.get("autosave")):
+        return
+    try:
+        backup_id = uuid.uuid4().hex
+        dest = SERVER_LIBRARY / f"{backup_id}.mp4"
+        shutil.copy2(clip_path, dest)
+        raw_title = info.get("title") or "clip"
+        title = sanitize_filename(raw_title)
+        meta = {
+            "id":          backup_id,
+            "title":       title,
+            "filename":    f"{title}.mp4",
+            "tags":        ["auto_saved"],
+            "duration":    round(duration, 1),
+            "local_id":    "",
+            "size":        dest.stat().st_size,
+            "backed_up_at": datetime.datetime.utcnow().isoformat(),
+            "auto_saved":  True,
+        }
+        (SERVER_LIBRARY / f"{backup_id}.json").write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        update_job(job_id, backup_id=backup_id)
+    except Exception:
+        pass
 
 
 # ── Nettoyage automatique ─────────────────────────────────────────────────────
@@ -417,8 +463,9 @@ def clip():
 
     job_id = uuid.uuid4().hex
     clip_path = DOWNLOADS_DIR / f"{job_id}_clip.mp4"
+    autosave = bool(BACKUP_SECRET and session.get("authenticated"))
 
-    update_job(job_id, phase="starting")
+    update_job(job_id, phase="starting", autosave=autosave)
     threading.Thread(
         target=run_clip_job,
         args=(job_id, url, start_s, end_s, clip_path),
@@ -543,6 +590,36 @@ def merge():
     except Exception as exc:
         shutil.rmtree(merge_dir, ignore_errors=True)
         return jsonify({"error": str(exc)}), 500
+
+
+# ── Authentification session ──────────────────────────────────────────────────
+
+@app.route("/auth", methods=["POST"])
+def auth():
+    if not BACKUP_SECRET:
+        return jsonify({"error": "Backup non activé."}), 403
+    key = (request.get_json(silent=True) or {}).get("key", "").strip()
+    if key != BACKUP_SECRET:
+        session.pop("authenticated", None)
+        return jsonify({"error": "Clé invalide."}), 401
+    session["authenticated"] = True
+    session.permanent = False
+    return jsonify({"ok": True})
+
+
+# ── Annulation ────────────────────────────────────────────────────────────────
+
+@app.route("/cancel/<job_id>", methods=["POST"])
+def cancel_job(job_id):
+    if not re.match(r"^[a-f0-9]{32}$", job_id):
+        return jsonify({"error": "ID invalide."}), 400
+    state = get_job(job_id)
+    if not state:
+        return jsonify({"error": "Job introuvable."}), 404
+    if state.get("phase") not in ("extracting", "encoding", "starting"):
+        return jsonify({"error": "Job non annulable dans cet état."}), 400
+    update_job(job_id, phase="cancelled")
+    return jsonify({"ok": True})
 
 
 # ── Backup serveur ────────────────────────────────────────────────────────────

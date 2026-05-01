@@ -428,6 +428,7 @@
       <div id="barFill"></div>
       <div id="barLabel"><span id="barPct">0%</span><span id="barStats"></span></div>
     </div>
+    <button id="cancelBtn" onclick="cancelClip()" style="display:none;margin-top:14px;background:transparent;border:1px solid #555;color:#aaa;padding:7px 18px;border-radius:8px;cursor:pointer;font-size:.8rem">✕ Annuler</button>
   </div>
 
   <div id="errorBox"></div>
@@ -783,6 +784,9 @@ function resetProgress() {
   document.getElementById('errorBox').style.display = 'none';
   document.getElementById('filenameWrap').style.display = 'none';
   document.getElementById('progressSection').style.display = 'block';
+  document.getElementById('cancelBtn').style.display = 'none';
+  document.getElementById('cancelBtn').disabled = false;
+  document.getElementById('cancelBtn').textContent = '✕ Annuler';
   document.getElementById('tagsInput').value = '';
   _clipBlobPromise = null;
 }
@@ -825,6 +829,7 @@ function handleState(state) {
   if (phase === 'starting' || phase === 'extracting') {
     setPhaseActive(1);
     document.getElementById('statusText').textContent = 'Analyse de la vidéo YouTube…';
+    document.getElementById('cancelBtn').style.display = 'inline-block';
 
   } else if (phase === 'encoding') {
     setPhaseActive(2);
@@ -839,9 +844,19 @@ function handleState(state) {
     if (e) parts.push(e);
     document.getElementById('barStats').textContent = parts.join('  ·  ');
     document.getElementById('statusText').textContent = 'Encodage du clip en cours…';
+    document.getElementById('cancelBtn').style.display = 'inline-block';
+
+  } else if (phase === 'cancelled') {
+    document.getElementById('cancelBtn').style.display = 'none';
+    document.getElementById('progressSection').style.display = 'none';
+    document.getElementById('errorBox').style.display = 'block';
+    document.getElementById('errorBox').textContent = 'Clip annulé.';
+    document.getElementById('clipBtn').disabled = false;
+    if (evtSource) { evtSource.close(); evtSource = null; }
 
   } else if (phase === 'done') {
     setAllDone();
+    document.getElementById('cancelBtn').style.display = 'none';
     document.getElementById('barWrap').style.display = 'block';
     document.getElementById('barFill').style.width = '100%';
     document.getElementById('barFill').style.background = 'linear-gradient(90deg, #1a5a30, #2ecc71)';
@@ -854,11 +869,24 @@ function handleState(state) {
     if (evtSource) { evtSource.close(); evtSource = null; }
 
   } else if (phase === 'error') {
+    document.getElementById('cancelBtn').style.display = 'none';
     document.getElementById('progressSection').style.display = 'none';
     document.getElementById('errorBox').style.display = 'block';
     document.getElementById('errorBox').textContent = state.error || 'Une erreur est survenue.';
     document.getElementById('clipBtn').disabled = false;
     if (evtSource) { evtSource.close(); evtSource = null; }
+  }
+}
+
+async function cancelClip() {
+  if (!currentJobId) return;
+  const btn = document.getElementById('cancelBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Annulation…';
+  try {
+    await fetch(`/cancel/${currentJobId}`, { method: 'POST' });
+  } catch(e) {
+    // Le serveur traitera l'annulation de toute façon
   }
 }
 
