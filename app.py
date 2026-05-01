@@ -131,7 +131,7 @@ def parse_timecode(tc: str) -> float:
 
 
 def is_valid_youtube_url(url: str) -> bool:
-    pattern = r"(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/)[\w\-]+"
+    pattern = r"(https?://)?(www\.)?(youtube\.com/(watch\?v=|shorts/)|youtu\.be/)[\w\-]+"
     return bool(re.match(pattern, url))
 
 
