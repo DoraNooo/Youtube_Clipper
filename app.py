@@ -369,7 +369,7 @@ def run_clip_job(job_id: str, url: str, start_s: float, end_s: float | None, cli
 
     duration = end_s - start_s
 
-    # Codecs source pour décider copy vs re-encode en phase 3
+    # Codecs source pour décider copy vs re-encode
     requested = info.get("requested_formats") or []
     if len(requested) >= 2:
         vcodec = requested[0].get("vcodec", "")
@@ -378,38 +378,72 @@ def run_clip_job(job_id: str, url: str, start_s: float, end_s: float | None, cli
         vcodec = info.get("vcodec", "")
         acodec = info.get("acodec", "")
 
-    # ── Phase 2 : Téléchargement (yt-dlp gère le throttling YouTube) ─────────
-    update_job(job_id, phase="downloading", pct=0, speed="")
-    try:
-        raw_path = _ytdlp_download_section(url, start_s, end_s, job_id)
-    except Exception as e:
-        # Vérifier si c'est une annulation volontaire
-        current = get_job(job_id)
-        if current and current.get("phase") == "cancelled":
-            return
-        update_job(job_id, phase="error", error=f"Erreur téléchargement : {e}")
-        return
-
-    # Annulation entre download et encode
-    current = get_job(job_id)
-    if current and current.get("phase") == "cancelled":
-        raw_path.unlink(missing_ok=True)
-        return
-
-    # ── Phase 3 : Encodage depuis fichier local (CPU à fond, pas de réseau) ──
     v_args, a_args = _ffmpeg_codec_args(vcodec, acodec)
     progress_file = DOWNLOADS_DIR / f"{job_id}_progress.txt"
     stderr_file   = DOWNLOADS_DIR / f"{job_id}_stderr.txt"
 
-    ffmpeg_cmd = [
-        "ffmpeg", "-y",
-        "-i", str(raw_path),
-        *v_args, *a_args,
-        "-movflags", "+faststart",
-        "-progress", str(progress_file),
-        "-nostats",
-        str(clip_path),
-    ]
+    # ── Stratégie selon la durée du clip ─────────────────────────────────────
+    # Court (≤ 5 min) : ffmpeg lit directement l'URL YouTube — rapide, pas de throttling
+    # Long  (> 5 min) : yt-dlp télécharge d'abord en local — résiste au throttling
+    SHORT_THRESHOLD = 300  # secondes
+
+    if duration <= SHORT_THRESHOLD:
+        # ── Mode direct : ffmpeg → URL YouTube (pas de phase downloading) ────
+        def time_args(s: float, e: float) -> list:
+            return ["-ss", str(s), "-to", str(e)]
+
+        ffmpeg_cmd = ["ffmpeg", "-y"]
+        if len(requested) >= 2:
+            vfmt, afmt = requested[0], requested[1]
+            ffmpeg_cmd += [
+                "-headers", header_str(vfmt, info),
+                *time_args(start_s, end_s), "-i", vfmt["url"],
+                "-headers", header_str(afmt, info),
+                *time_args(start_s, end_s), "-i", afmt["url"],
+            ]
+        else:
+            stream_url = info.get("url", "")
+            if not stream_url:
+                update_job(job_id, phase="error", error="Impossible de récupérer l'URL du stream.")
+                return
+            ffmpeg_cmd += [
+                "-headers", header_str(info, {}),
+                *time_args(start_s, end_s), "-i", stream_url,
+            ]
+        ffmpeg_cmd += [
+            *v_args, *a_args,
+            "-movflags", "+faststart",
+            "-progress", str(progress_file),
+            "-nostats",
+            str(clip_path),
+        ]
+
+    else:
+        # ── Mode download : yt-dlp section → ffmpeg local ────────────────────
+        update_job(job_id, phase="downloading", pct=0, speed="")
+        try:
+            raw_path = _ytdlp_download_section(url, start_s, end_s, job_id)
+        except Exception as e:
+            current = get_job(job_id)
+            if current and current.get("phase") == "cancelled":
+                return
+            update_job(job_id, phase="error", error=f"Erreur téléchargement : {e}")
+            return
+
+        current = get_job(job_id)
+        if current and current.get("phase") == "cancelled":
+            raw_path.unlink(missing_ok=True)
+            return
+
+        ffmpeg_cmd = [
+            "ffmpeg", "-y",
+            "-i", str(raw_path),
+            *v_args, *a_args,
+            "-movflags", "+faststart",
+            "-progress", str(progress_file),
+            "-nostats",
+            str(clip_path),
+        ]
 
     update_job(job_id, phase="encoding", pct=0, speed="", bitrate="")
 
