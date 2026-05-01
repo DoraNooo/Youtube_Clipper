@@ -250,6 +250,13 @@ def _ytdlp_download_section(url: str, start_s: float, end_s: float, job_id: str)
         "--newline",
         "--no-warnings",
     ]
+    # aria2c : 8 connexions parallèles par fragment → contourne le throttling YouTube
+    # Installation : sudo apt install aria2
+    if shutil.which("aria2c"):
+        cmd += [
+            "--downloader", "aria2c",
+            "--downloader-args", "aria2c:-x 8 -s 8 -k 2M --file-allocation=none",
+        ]
     if cookie.get("cookiefile"):
         cmd += ["--cookies", cookie["cookiefile"]]
     if _yt_dlp_verbose():
