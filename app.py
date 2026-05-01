@@ -143,8 +143,34 @@ def sanitize_filename(name: str) -> str:
     return name[:80] or "clip"
 
 
+def _ffmpeg_codec_args(vcodec: str, acodec: str) -> tuple[list, list]:
+    """Choisit les arguments de codec ffmpeg selon les codecs sources.
+
+    Stratégie :
+    - Vidéo H.264 (avc1) → copy (instantané)
+    - Vidéo VP9 / AV1 / autre → libx264 ultrafast (2-3x plus rapide que 'fast')
+    - Audio AAC (mp4a) → copy (instantané)
+    - Audio Opus / autre → AAC 128k (encodage audio seul = très rapide)
+
+    La sortie est toujours un MP4 H.264/AAC compatible avec tous les lecteurs.
+    """
+    v = (vcodec or "").lower()
+    a = (acodec or "").lower()
+
+    v_copy = v.startswith("avc1") or v.startswith("h264")
+    a_copy = a.startswith("mp4a")
+
+    v_args = ["-c:v", "copy"] if v_copy else ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "23"]
+    a_args = ["-c:a", "copy"] if a_copy else ["-c:a", "aac", "-b:a", "128k"]
+
+    return v_args, a_args
+
+
 _YTDLP_FMT_PREF = (
-    # Paysage ≤1080p OU portrait type Short (largeur ≤1080). Puis repli sans plafond / flux unique.
+    # H.264 + AAC en priorité → copy mode instantané sur VPS
+    "bestvideo[vcodec^=avc1][height<=1080]+bestaudio[acodec^=mp4a]/"
+    "bestvideo[vcodec^=avc1][height<=1080]+bestaudio/"
+    # Meilleure qualité générale ≤1080p (VP9/AV1 + Opus) → ultrafast reencode
     "bestvideo[height<=1080]+bestaudio/"
     "bestvideo[width<=1080]+bestaudio/"
     "bestvideo+bestaudio/"
@@ -232,6 +258,7 @@ def run_clip_job(job_id: str, url: str, start_s: float, end_s: float | None, cli
 
     if len(requested) >= 2:
         vfmt, afmt = requested[0], requested[1]
+        vcodec, acodec = vfmt.get("vcodec", ""), afmt.get("acodec", "")
         ffmpeg_cmd += [
             "-headers", header_str(vfmt, info),
             *time_args(start_s, end_s), "-i", vfmt["url"],
@@ -243,18 +270,22 @@ def run_clip_job(job_id: str, url: str, start_s: float, end_s: float | None, cli
         if not stream_url:
             update_job(job_id, phase="error", error="Impossible de récupérer l'URL du stream.")
             return
+        vcodec = info.get("vcodec", "")
+        acodec = info.get("acodec", "")
         ffmpeg_cmd += [
             "-headers", header_str(info, {}),
             *time_args(start_s, end_s), "-i", stream_url,
         ]
+
+    v_args, a_args = _ffmpeg_codec_args(vcodec, acodec)
 
     # Fichiers temporaires : progression + stderr (évite les deadlocks de pipe)
     progress_file = DOWNLOADS_DIR / f"{job_id}_progress.txt"
     stderr_file   = DOWNLOADS_DIR / f"{job_id}_stderr.txt"
 
     ffmpeg_cmd += [
-        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-        "-c:a", "aac", "-b:a", "128k",
+        *v_args,
+        *a_args,
         "-movflags", "+faststart",
         "-progress", str(progress_file),
         "-nostats",
