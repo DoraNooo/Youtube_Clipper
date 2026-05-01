@@ -242,9 +242,9 @@ def _ytdlp_download_section(url: str, start_s: float, end_s: float, job_id: str)
     cmd = [
         sys.executable, "-m", "yt_dlp",
         "--download-sections", f"*{start_s:.3f}-{end_s:.3f}",
-        "--force-keyframes-at-cuts",
         "--format", _YTDLP_FMT_PREF,
         "--merge-output-format", "mp4",
+        "--concurrent-fragments", "4",
         "--output", out_tmpl,
         "--progress",
         "--newline",
