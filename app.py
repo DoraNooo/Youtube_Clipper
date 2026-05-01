@@ -41,6 +41,37 @@ def _yt_dlp_cookie_opts() -> dict:
     return {}
 
 
+def _yt_dlp_verbose() -> bool:
+    return os.environ.get("YT_DLP_VERBOSE", "").strip().lower() in ("1", "true", "yes")
+
+
+class _YtdlpQuietLogger:
+    """Évite un flux d’ERROR dans journalctl entre chaque tentative yt-dlp."""
+
+    def debug(self, msg):
+        pass
+
+    def info(self, msg):
+        pass
+
+    def warning(self, msg):
+        pass
+
+    def error(self, msg):
+        pass
+
+
+def _youtube_failure_hint(exc: BaseException) -> str:
+    low = str(exc).lower()
+    if "requested format is not available" not in low and "sign in" not in low and "bot" not in low:
+        return ""
+    return (
+        "Mettre à jour yt-dlp sur le serveur (venv) : pip install -U yt-dlp. "
+        "Ré-exporter un fichier cookies Netscape frais depuis youtube.com (session connectée). "
+        "Sur une IP datacenter, sans cookies valides YouTube bloque souvent l’extraction."
+    )
+
+
 def _check_backup_key() -> bool:
     key = request.headers.get("X-Backup-Key", "").strip()
     return bool(BACKUP_SECRET) and key == BACKUP_SECRET
@@ -115,13 +146,26 @@ def _youtube_extract_info(url: str) -> dict:
 
     Sur VPS (cookies, métadonnées incomplètes, client « web » seul), la chaîne avec filtres
     height/width peut ne matcher aucun format ; on ajoute des sélecteurs plus larges et des
-    player_client alternatifs (android_embedded, etc.). Si des cookies sont configurés, une
-    série de tentatives sans fichier cookie est faite en dernier recours.
+    player_client alternatifs (android_embedded, etc.).
+
+    Sans fichier cookies, une IP datacenter déclenche souvent « Sign in… » : les cookies sont
+    alors nécessaires. Si des cookies sont configurés, les tentatives sans cookie sont désactivées
+    par défaut (elles ne font qu’empiler des erreurs bot). Pour les réactiver : YT_DLP_TRY_WITHOUT_COOKIES=1.
+
+    Logs yt-dlp détaillés : YT_DLP_VERBOSE=1.
     """
     cookie = _yt_dlp_cookie_opts()
-    bases: list[dict] = [{"quiet": True, "no_warnings": True, **cookie}]
-    if cookie:
-        bases.append({"quiet": True, "no_warnings": True})
+    common: dict = {"quiet": True, "no_warnings": True}
+    if not _yt_dlp_verbose():
+        common["logger"] = _YtdlpQuietLogger()
+
+    bases: list[dict] = [{**common, **cookie}]
+    if cookie and os.environ.get("YT_DLP_TRY_WITHOUT_COOKIES", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        bases.append({**common})
 
     # (format string, extractor_args fusionné dans opts ; {} = défaut yt-dlp)
     specs: list[tuple[str, dict]] = [
@@ -167,7 +211,11 @@ def run_clip_job(job_id: str, url: str, start_s: float, end_s: float | None, cli
     try:
         info = _youtube_extract_info(url)
     except Exception as e:
-        update_job(job_id, phase="error", error=f"Erreur YouTube : {e}")
+        msg = f"Erreur YouTube : {e}"
+        hint = _youtube_failure_hint(e)
+        if hint:
+            msg = f"{msg} — {hint}"
+        update_job(job_id, phase="error", error=msg)
         return
 
     # Stocker le titre sanitisé pour le nom de fichier par défaut
