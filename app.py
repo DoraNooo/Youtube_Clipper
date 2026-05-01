@@ -565,6 +565,161 @@ def _autosave_to_library(job_id: str, clip_path: Path, info: dict, duration: flo
 
 # ── Nettoyage automatique ─────────────────────────────────────────────────────
 
+# ── Sous-titres (captions TikTok/Reels) ──────────────────────────────────────
+
+_whisper_cache: dict = {}   # size → WhisperModel (chargé une fois par taille)
+
+
+def _get_whisper_model(size: str = "tiny"):
+    if size not in _whisper_cache:
+        from faster_whisper import WhisperModel
+        _whisper_cache[size] = WhisperModel(size, device="cpu", compute_type="int8")
+    return _whisper_cache[size]
+
+
+def _group_words_tiktok(segments, words_per_group: int = 3) -> list:
+    """Regroupe les mots en blocs de N pour l'affichage style caption."""
+    all_words = []
+    for seg in segments:
+        if seg.words:
+            for w in seg.words:
+                word = w.word.strip()
+                if word:
+                    all_words.append((w.start, w.end, word))
+        else:
+            words = seg.text.strip().split()
+            if not words:
+                continue
+            dur = (seg.end - seg.start) / len(words)
+            for i, w in enumerate(words):
+                all_words.append((seg.start + i * dur, seg.start + (i + 1) * dur, w))
+
+    groups = []
+    for i in range(0, len(all_words), words_per_group):
+        chunk = all_words[i:i + words_per_group]
+        if not chunk:
+            continue
+        groups.append((chunk[0][0], chunk[-1][1], " ".join(c[2] for c in chunk)))
+    return groups
+
+
+def _generate_ass(groups: list, options: dict) -> str:
+    """Génère le contenu d'un fichier ASS pour les captions style TikTok/Reels."""
+    style    = options.get("style", "white_outline")
+    size_key = options.get("font_size", "large")
+    position = options.get("position", "bottom")
+
+    fs_map = {"small": 56, "normal": 72, "large": 88, "xlarge": 104}
+    fs = fs_map.get(size_key, 88)
+
+    alignment = 2 if position == "bottom" else 5
+    margin_v  = 80 if position == "bottom" else 450
+
+    style_map = {
+        "white_outline": dict(primary="&H00FFFFFF", outline="&H00000000", back="&H00000000", bs=1, ow=4, sh=2),
+        "yellow_outline": dict(primary="&H0000FFFF", outline="&H00000000", back="&H00000000", bs=1, ow=4, sh=0),
+        "white_box":      dict(primary="&H00FFFFFF", outline="&H00000000", back="&H90000000", bs=4, ow=10, sh=0),
+    }
+    s = style_map.get(style, style_map["white_outline"])
+
+    def t(sec: float) -> str:
+        h, r = divmod(sec, 3600)
+        m, s = divmod(r, 60)
+        return f"{int(h)}:{int(m):02d}:{s:05.2f}"
+
+    header = f"""\
+[Script Info]
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+WrapStyle: 1
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Cap,Arial,{fs},{s['primary']},&H000000FF,{s['outline']},{s['back']},-1,0,0,0,100,100,0,0,{s['bs']},{s['ow']},{s['sh']},{alignment},10,10,{margin_v},1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+    events = "\n".join(
+        f"Dialogue: 0,{t(start)},{t(end)},Cap,,0,0,0,,{text.upper()}"
+        for start, end, text in groups
+    )
+    return header + events + "\n"
+
+
+def run_subtitle_job(sub_id: str, clip_path: Path, options: dict):
+    ass_path = DOWNLOADS_DIR / f"{sub_id}.ass"
+    out_path = DOWNLOADS_DIR / f"{sub_id}_sub.mp4"
+    stderr_f = DOWNLOADS_DIR / f"{sub_id}_stderr.txt"
+    try:
+        # ── Transcription Whisper ─────────────────────────────────────────────
+        try:
+            from faster_whisper import WhisperModel  # noqa: F401
+        except ImportError:
+            update_job(sub_id, phase="error",
+                       error="faster-whisper non installé. Sur le VPS : pip install faster-whisper")
+            return
+
+        update_job(sub_id, phase="transcribing", pct=5)
+        model = _get_whisper_model("tiny")
+        lang  = options.get("language") or None
+        if lang == "auto":
+            lang = None
+
+        segs_gen, info = model.transcribe(
+            str(clip_path),
+            word_timestamps=True,
+            language=lang,
+            beam_size=1,
+            vad_filter=True,
+        )
+
+        total_dur = getattr(info, "duration", 0) or 1
+        all_segs  = []
+        for seg in segs_gen:
+            all_segs.append(seg)
+            pct = min(55, int(seg.end / total_dur * 55) + 5)
+            update_job(sub_id, phase="transcribing", pct=pct)
+
+        if not all_segs:
+            update_job(sub_id, phase="error", error="Aucun texte détecté dans le clip.")
+            return
+
+        # ── Génération du fichier ASS ─────────────────────────────────────────
+        update_job(sub_id, phase="rendering", pct=60)
+        wpg    = max(1, min(6, int(options.get("words_per_group", 3))))
+        groups = _group_words_tiktok(all_segs, wpg)
+        ass_path.write_text(_generate_ass(groups, options), encoding="utf-8")
+
+        # ── Burn-in ffmpeg ────────────────────────────────────────────────────
+        update_job(sub_id, phase="rendering", pct=70)
+        ass_escaped = str(ass_path).replace("\\", "/").replace(":", "\\:")
+        with open(stderr_f, "w") as ef:
+            proc = subprocess.Popen(
+                ["ffmpeg", "-y", "-i", str(clip_path),
+                 "-vf", f"ass='{ass_escaped}'",
+                 "-c:a", "copy",
+                 "-movflags", "+faststart",
+                 str(out_path)],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=ef,
+            )
+        proc.wait()
+
+        if proc.returncode != 0:
+            err = stderr_f.read_text()[-600:]
+            update_job(sub_id, phase="error", error=f"Erreur ffmpeg burn-in : {err}")
+            return
+
+        update_job(sub_id, phase="done", pct=100)
+
+    except Exception as e:
+        update_job(sub_id, phase="error", error=f"Erreur sous-titres : {e}")
+    finally:
+        ass_path.unlink(missing_ok=True)
+        stderr_f.unlink(missing_ok=True)
+
+
 def _cleanup_loop():
     while True:
         time.sleep(300)
@@ -665,14 +820,8 @@ def download(job_id):
     custom_name = request.args.get("filename", "").strip()
     download_name = (sanitize_filename(custom_name) + ".mp4") if custom_name else "clip.mp4"
 
-    @after_this_request
-    def remove_file(response):
-        try:
-            clip_path.unlink(missing_ok=True)
-        except Exception:
-            pass
-        return response
-
+    # Pas de suppression immédiate : le cleanup loop (~10 min) s'en charge.
+    # Cela permet à l'utilisateur d'ajouter des sous-titres après téléchargement.
     return send_file(
         clip_path,
         mimetype="video/mp4",
@@ -742,6 +891,64 @@ def merge():
     except Exception as exc:
         shutil.rmtree(merge_dir, ignore_errors=True)
         return jsonify({"error": str(exc)}), 500
+
+
+# ── Sous-titres ───────────────────────────────────────────────────────────────
+
+@app.route("/subtitles", methods=["POST"])
+def start_subtitles():
+    data       = request.get_json() or {}
+    job_id     = (data.get("job_id") or "").strip()
+    if not re.match(r"^[a-f0-9]{32}$", job_id):
+        return jsonify({"error": "job_id invalide."}), 400
+
+    clip_path = DOWNLOADS_DIR / f"{job_id}_clip.mp4"
+    if not clip_path.exists():
+        return jsonify({"error": "Clip introuvable. Regénérez le clip avant d'ajouter des sous-titres."}), 404
+
+    options = {
+        "language":       data.get("language", "auto"),
+        "words_per_group": int(data.get("words_per_group", 3)),
+        "font_size":      data.get("font_size", "large"),
+        "style":          data.get("style", "white_outline"),
+        "position":       data.get("position", "bottom"),
+    }
+
+    sub_id = uuid.uuid4().hex
+    update_job(sub_id, phase="transcribing", pct=0)
+    threading.Thread(target=run_subtitle_job, args=(sub_id, clip_path, options), daemon=True).start()
+    return jsonify({"sub_id": sub_id})
+
+
+@app.route("/subtitles/progress/<sub_id>")
+def subtitles_progress(sub_id):
+    if not re.match(r"^[a-f0-9]{32}$", sub_id):
+        return "Invalid", 400
+
+    def generate():
+        while True:
+            state = get_job(sub_id)
+            if state:
+                yield f"data: {json.dumps({k: v for k, v in state.items() if not k.startswith('_')})}\n\n"
+                if state.get("phase") in ("done", "error"):
+                    break
+            time.sleep(0.6)
+
+    return Response(stream_with_context(generate()),
+                    mimetype="text/event-stream",
+                    headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
+
+
+@app.route("/subtitles/download/<sub_id>")
+def download_subtitled(sub_id):
+    if not re.match(r"^[a-f0-9]{32}$", sub_id):
+        return jsonify({"error": "ID invalide."}), 400
+    out_path = DOWNLOADS_DIR / f"{sub_id}_sub.mp4"
+    if not out_path.exists():
+        return jsonify({"error": "Fichier introuvable."}), 404
+    custom = request.args.get("filename", "").strip()
+    name   = (sanitize_filename(custom) + "_sub.mp4") if custom else "clip_subtitles.mp4"
+    return send_file(out_path, mimetype="video/mp4", as_attachment=True, download_name=name)
 
 
 # ── Authentification session ──────────────────────────────────────────────────

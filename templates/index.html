@@ -323,9 +323,58 @@
     #saveLibBtn:hover:not(:disabled) { opacity: .88; }
     #saveLibBtn:disabled { opacity: .45; cursor: not-allowed; }
 
+    /* ── Sous-titres ── */
+    #subBtn {
+      width: 100%; margin-top: 10px; padding: 12px;
+      background: transparent; border: 1px solid #2a2a42;
+      border-radius: 12px; color: #a0a0c0; font-size: .88rem;
+      cursor: pointer; transition: border-color .2s, color .2s;
+    }
+    #subBtn:hover { border-color: #5a5aff; color: #fff; }
+
+    #subPanel {
+      display: none; margin-top: 16px;
+      background: #0d0d14; border: 1px solid #2a2a42;
+      border-radius: 14px; padding: 18px;
+    }
+    #subPanel h3 { font-size: .85rem; color: #888; text-transform: uppercase;
+                   letter-spacing: .06em; margin: 0 0 14px; }
+    .sub-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .sub-field label { display: block; font-size: .75rem; color: #666; margin-bottom: 5px; }
+    .sub-field select {
+      width: 100%; background: #111118; border: 1px solid #2a2a40;
+      border-radius: 8px; padding: 8px 10px; color: #e0e0e8;
+      font-size: .84rem; cursor: pointer;
+    }
+    #subGenBtn {
+      width: 100%; margin-top: 14px; padding: 11px;
+      background: linear-gradient(135deg, #7c3aed, #5a1fa0);
+      border: none; border-radius: 10px; color: #fff;
+      font-size: .9rem; font-weight: 700; cursor: pointer;
+    }
+    #subGenBtn:disabled { opacity: .45; cursor: not-allowed; }
+    #subProgress { margin-top: 14px; display: none; }
+    #subStatus { font-size: .82rem; color: #aaa; margin-bottom: 8px; }
+    #subBarWrap {
+      background: #111118; border-radius: 8px; height: 8px; overflow: hidden;
+    }
+    #subBarFill {
+      height: 100%; width: 0%; border-radius: 8px;
+      background: linear-gradient(90deg, #7c3aed, #a855f7);
+      transition: width .3s ease;
+    }
+    #subDownloadBtn {
+      display: none; width: 100%; margin-top: 12px; padding: 11px;
+      background: linear-gradient(135deg, #7c3aed, #5a1fa0);
+      border: none; border-radius: 10px; color: #fff;
+      font-size: .9rem; font-weight: 700; cursor: pointer;
+    }
+    #subErrorBox { display: none; margin-top: 10px; color: #ff6060; font-size: .82rem; }
+
     @media (max-width: 680px) {
       body { padding: 14px 10px 28px; }
       .card { padding: 20px 14px; border-radius: 16px; }
+      .sub-grid { grid-template-columns: 1fr; }
       .logo h1 { font-size: 1.2rem; }
       .timecodes { grid-template-columns: 1fr; gap: 10px; }
       .field-label {
@@ -448,6 +497,68 @@
     <div class="clip-action-row">
       <button id="downloadBtn" onclick="downloadClip()">⬇ Télécharger</button>
       <button id="saveLibBtn" onclick="saveToLibrary()">📚 Ma bibliothèque</button>
+    </div>
+
+    <button id="subBtn" onclick="toggleSubPanel()">🎬 Ajouter des sous-titres (captions)</button>
+
+    <div id="subPanel">
+      <h3>Options captions</h3>
+      <div class="sub-grid">
+        <div class="sub-field">
+          <label>Langue</label>
+          <select id="subLang">
+            <option value="auto">Auto-détection</option>
+            <option value="fr">Français</option>
+            <option value="en">Anglais</option>
+            <option value="es">Espagnol</option>
+            <option value="de">Allemand</option>
+            <option value="it">Italien</option>
+            <option value="pt">Portugais</option>
+          </select>
+        </div>
+        <div class="sub-field">
+          <label>Mots par groupe</label>
+          <select id="subWords">
+            <option value="2">2 mots</option>
+            <option value="3" selected>3 mots</option>
+            <option value="4">4 mots</option>
+            <option value="5">5 mots</option>
+          </select>
+        </div>
+        <div class="sub-field">
+          <label>Taille</label>
+          <select id="subSize">
+            <option value="small">Petite</option>
+            <option value="normal">Normale</option>
+            <option value="large" selected>Grande</option>
+            <option value="xlarge">Très grande</option>
+          </select>
+        </div>
+        <div class="sub-field">
+          <label>Style</label>
+          <select id="subStyle">
+            <option value="white_outline" selected>Blanc + contour</option>
+            <option value="yellow_outline">Jaune + contour</option>
+            <option value="white_box">Blanc + fond noir</option>
+          </select>
+        </div>
+        <div class="sub-field">
+          <label>Position</label>
+          <select id="subPos">
+            <option value="bottom" selected>Bas de l'écran</option>
+            <option value="center">Centre</option>
+          </select>
+        </div>
+      </div>
+
+      <button id="subGenBtn" onclick="generateSubtitles()">✨ Générer les captions</button>
+
+      <div id="subProgress">
+        <div id="subStatus">Transcription en cours…</div>
+        <div id="subBarWrap"><div id="subBarFill"></div></div>
+      </div>
+      <div id="subErrorBox"></div>
+      <button id="subDownloadBtn" onclick="downloadSubtitled()">⬇ Télécharger avec captions</button>
     </div>
   </div>
 </div>
@@ -789,6 +900,10 @@ function resetProgress() {
   document.getElementById('cancelBtn').style.display = 'none';
   document.getElementById('cancelBtn').disabled = false;
   document.getElementById('cancelBtn').textContent = '✕ Annuler';
+  document.getElementById('subBtn').style.display = 'none';
+  document.getElementById('subPanel').style.display = 'none';
+  document.getElementById('subBtn').textContent = '🎬 Ajouter des sous-titres (captions)';
+  if (typeof resetSubPanel === 'function') resetSubPanel();
   document.getElementById('tagsInput').value = '';
   _clipBlobPromise = null;
 }
@@ -880,6 +995,7 @@ function handleState(state) {
     document.getElementById('statusText').textContent = 'Clip prêt — téléchargez ou sauvegardez dans votre bibliothèque.';
     if (state.video_title) document.getElementById('filenameInput').value = 'clip_' + state.video_title;
     document.getElementById('filenameWrap').style.display = 'block';
+    document.getElementById('subBtn').style.display = 'block';
     document.getElementById('clipBtn').disabled = false;
     if (evtSource) { evtSource.close(); evtSource = null; }
 
@@ -1021,6 +1137,121 @@ async function saveToLibrary() {
     btn.disabled = false;
     alert('Erreur lors de la sauvegarde : ' + e.message);
   }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Sous-titres / Captions TikTok
+// ═══════════════════════════════════════════════════════════
+let currentSubId = null;
+let subEvtSource = null;
+
+function toggleSubPanel() {
+  const panel = document.getElementById('subPanel');
+  const open  = panel.style.display === 'block';
+  panel.style.display = open ? 'none' : 'block';
+  document.getElementById('subBtn').textContent =
+    open ? '🎬 Ajouter des sous-titres (captions)' : '✕ Fermer les options captions';
+}
+
+function resetSubPanel() {
+  document.getElementById('subProgress').style.display = 'none';
+  document.getElementById('subErrorBox').style.display = 'none';
+  document.getElementById('subDownloadBtn').style.display = 'none';
+  document.getElementById('subBarFill').style.width = '0%';
+  document.getElementById('subGenBtn').disabled = false;
+  document.getElementById('subGenBtn').textContent = '✨ Générer les captions';
+  currentSubId = null;
+  if (subEvtSource) { subEvtSource.close(); subEvtSource = null; }
+}
+
+async function generateSubtitles() {
+  if (!currentJobId) { alert('Générez d\'abord un clip.'); return; }
+  resetSubPanel();
+
+  const options = {
+    job_id:          currentJobId,
+    language:        document.getElementById('subLang').value,
+    words_per_group: parseInt(document.getElementById('subWords').value),
+    font_size:       document.getElementById('subSize').value,
+    style:           document.getElementById('subStyle').value,
+    position:        document.getElementById('subPos').value,
+  };
+
+  const btn = document.getElementById('subGenBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Démarrage…';
+  document.getElementById('subProgress').style.display = 'block';
+
+  let data;
+  try {
+    const res = await fetch('/subtitles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(options),
+    });
+    data = await res.json();
+  } catch(e) {
+    document.getElementById('subErrorBox').style.display = 'block';
+    document.getElementById('subErrorBox').textContent = 'Erreur réseau : ' + e.message;
+    btn.disabled = false; btn.textContent = '✨ Générer les captions';
+    return;
+  }
+
+  if (data.error) {
+    document.getElementById('subErrorBox').style.display = 'block';
+    document.getElementById('subErrorBox').textContent = data.error;
+    btn.disabled = false; btn.textContent = '✨ Générer les captions';
+    document.getElementById('subProgress').style.display = 'none';
+    return;
+  }
+
+  currentSubId = data.sub_id;
+  subEvtSource = new EventSource(`/subtitles/progress/${currentSubId}`);
+  subEvtSource.onmessage = e => handleSubState(JSON.parse(e.data));
+  subEvtSource.onerror = () => {
+    document.getElementById('subErrorBox').style.display = 'block';
+    document.getElementById('subErrorBox').textContent = 'Connexion perdue.';
+    btn.disabled = false; btn.textContent = '✨ Générer les captions';
+    if (subEvtSource) { subEvtSource.close(); subEvtSource = null; }
+  };
+}
+
+function handleSubState(state) {
+  const { phase, pct } = state;
+  const fill   = document.getElementById('subBarFill');
+  const status = document.getElementById('subStatus');
+
+  if (phase === 'transcribing') {
+    status.textContent = `Transcription (Whisper)… ${pct || 0}%`;
+    fill.style.width = (pct || 0) + '%';
+  } else if (phase === 'rendering') {
+    status.textContent = 'Génération des captions et burn-in…';
+    fill.style.width = (pct || 70) + '%';
+  } else if (phase === 'done') {
+    fill.style.width = '100%';
+    status.textContent = '✅ Captions générées !';
+    document.getElementById('subDownloadBtn').style.display = 'block';
+    document.getElementById('subGenBtn').textContent = '✨ Regénérer';
+    document.getElementById('subGenBtn').disabled = false;
+    if (subEvtSource) { subEvtSource.close(); subEvtSource = null; }
+  } else if (phase === 'error') {
+    document.getElementById('subErrorBox').style.display = 'block';
+    document.getElementById('subErrorBox').textContent = state.error || 'Erreur inconnue.';
+    document.getElementById('subProgress').style.display = 'none';
+    document.getElementById('subGenBtn').disabled = false;
+    document.getElementById('subGenBtn').textContent = '✨ Générer les captions';
+    if (subEvtSource) { subEvtSource.close(); subEvtSource = null; }
+  }
+}
+
+async function downloadSubtitled() {
+  if (!currentSubId) return;
+  const rawName = document.getElementById('filenameInput').value.trim();
+  const qs = rawName ? `?filename=${encodeURIComponent(rawName)}` : '';
+  const a = document.createElement('a');
+  a.href = `/subtitles/download/${currentSubId}${qs}`;
+  a.download = (rawName || 'clip') + '_sub.mp4';
+  a.click();
 }
 </script>
 <script src="/static/js/clipdb.js"></script>
