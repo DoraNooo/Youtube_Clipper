@@ -1,8 +1,10 @@
 import os
 import re
+import sys
 import json
 import uuid
 import shutil
+import signal
 import datetime
 import subprocess
 import threading
@@ -228,107 +230,102 @@ def _youtube_extract_info(url: str) -> dict:
 
 
 def _ytdlp_download_section(url: str, start_s: float, end_s: float, job_id: str) -> Path:
-    """Télécharge uniquement la section [start_s, end_s] via yt-dlp.
+    """Télécharge uniquement la section [start_s, end_s] via yt-dlp (subprocess).
 
-    yt-dlp gère le throttling YouTube, les retries et les segments adaptatifs
-    bien mieux que ffmpeg en lecture directe depuis les CDN.
-    Retourne le chemin du fichier téléchargé (mp4 ou mkv selon disponibilité).
+    Avantages vs API Python :
+    - Progression parsée depuis stdout → fiable même avec quiet/logger
+    - Groupe de processus (os.setsid) → os.killpg() tue yt-dlp ET ses ffmpeg enfants
     """
-    cookie = _yt_dlp_cookie_opts()
-    node   = _yt_dlp_node_opts()
     out_tmpl = str(DOWNLOADS_DIR / f"{job_id}_raw.%(ext)s")
+    cookie   = _yt_dlp_cookie_opts()
 
-    # Suivi de progression multi-flux (vidéo + audio téléchargés séparément).
-    # Stratégie : fragments en priorité (YouTube DASH), bytes en fallback.
-    _totals:     dict = {}   # key → total_bytes
-    _dones:      dict = {}   # key → downloaded_bytes
-    _frag_idx:   dict = {}   # key → fragment_index courant
-    _frag_count: dict = {}   # key → fragment_count total
-    _n_streams   = [0]       # nombre de flux détectés (liste pour closure mutable)
+    cmd = [
+        sys.executable, "-m", "yt_dlp",
+        "--download-sections", f"*{start_s:.3f}-{end_s:.3f}",
+        "--force-keyframes-at-cuts",
+        "--format", _YTDLP_FMT_PREF,
+        "--merge-output-format", "mp4",
+        "--output", out_tmpl,
+        "--progress",
+        "--newline",
+        "--no-warnings",
+    ]
+    if cookie.get("cookiefile"):
+        cmd += ["--cookies", cookie["cookiefile"]]
+    if _yt_dlp_verbose():
+        cmd.append("--verbose")
+    cmd.append(url)
 
-    def _hook(d: dict):
-        key = d.get("info_dict", {}).get("format_id") or d.get("filename") or "stream"
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        preexec_fn=os.setsid,   # Nouveau groupe de processus (Linux/macOS)
+    )
 
-        if d["status"] == "downloading":
-            _n_streams[0] = max(_n_streams[0], len({key, *_dones.keys()}))
+    # Stocker le PGID pour l'annulation depuis la route /cancel
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (OSError, ProcessLookupError):
+        pgid = None
+    update_job(job_id, _ytdlp_pgid=pgid)
 
-            # Fragments (DASH/HLS) : méthode la plus fiable pour YouTube
-            fi = d.get("fragment_index") or 0
-            fc = d.get("fragment_count") or 0
-            if fc > 0:
-                _frag_idx[key]   = fi
-                _frag_count[key] = fc
+    # yt-dlp télécharge vidéo + audio séquentiellement (2 flux).
+    # On détecte le changement de flux quand le % repart de zéro.
+    # Flux 0 → 0-49 %, flux 1 → 50-98 %.
+    _stream_idx = [0]
+    _last_pct   = [0.0]
+    _buf: list  = []
 
-            # Bytes : fallback quand fragment_count non disponible
-            tb = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
-            db = d.get("downloaded_bytes") or 0
-            if tb:
-                _totals[key] = tb
-            _dones[key] = db
+    def _kill_proc():
+        if pgid:
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                pass
+        proc.wait()
 
-            # Calcul du pourcentage : préférer fragments, sinon bytes
-            total_frags = sum(_frag_count.values())
-            if total_frags > 0:
-                done_frags = sum(_frag_idx.values())
-                pct = min(99, int(done_frags / total_frags * 100))
-            else:
-                total_b = sum(_totals.values()) or 0
-                done_b  = sum(_dones.values())
-                pct = min(99, int(done_b / total_b * 100)) if total_b > 0 else 0
+    try:
+        for line in proc.stdout:
+            _buf.append(line)
 
-            spd = d.get("speed") or 0
-            spd_str = f"{spd / 1_048_576:.1f} MB/s" if spd else ""
-            update_job(job_id, phase="downloading", pct=pct, speed=spd_str)
+            # Vérification annulation à chaque ligne de sortie
+            state = get_job(job_id)
+            if state and state.get("phase") == "cancelled":
+                _kill_proc()
+                raise RuntimeError("Job annulé")
 
-        elif d["status"] == "finished":
-            # Un flux terminé : recalcul pour marquer sa contribution à 100%
-            if key in _frag_count:
-                _frag_idx[key] = _frag_count[key]
-            elif key in _totals:
-                _dones[key] = _totals[key]
-            total_frags = sum(_frag_count.values())
-            if total_frags > 0:
-                pct = min(99, int(sum(_frag_idx.values()) / total_frags * 100))
-            else:
-                total_b = sum(_totals.values()) or 0
-                pct = min(99, int(sum(_dones.values()) / total_b * 100)) if total_b > 0 else 0
-            update_job(job_id, phase="downloading", pct=pct, speed="")
+            # Progression : [download]  XX.X% of ... at Y.YMiB/s ETA HH:MM
+            m = re.search(r'\[download\]\s+(\d+(?:\.\d+)?)%', line)
+            if m:
+                raw = float(m.group(1))
+                # Détecter le passage au 2ème flux (% retombe de >50% à <10%)
+                if _last_pct[0] > 50.0 and raw < 10.0:
+                    _stream_idx[0] = min(_stream_idx[0] + 1, 1)
+                _last_pct[0] = raw
 
-        elif d["status"] == "error":
-            update_job(job_id, phase="downloading", pct=0, speed="")
+                chunk = 49.0   # Chaque flux occupe ~49% de la barre
+                offset = _stream_idx[0] * chunk
+                pct = min(98, int(offset + raw / 100 * chunk))
 
-    # postprocessor_hooks : couvre la phase ffmpeg interne de yt-dlp
-    # (force_keyframes_at_cuts, fusion vidéo+audio) invisible dans progress_hooks
-    def _pp_hook(d: dict):
-        if d.get("status") == "started":
-            update_job(job_id, phase="downloading", pct=99, speed="Finalisation…")
-        elif d.get("status") == "finished":
-            update_job(job_id, phase="downloading", pct=99, speed="")
+                spd_m = re.search(r'at\s+(\S+(?:Ki|Mi|Gi)?B/s)', line)
+                spd_str = spd_m.group(1) if spd_m else ""
+                update_job(job_id, phase="downloading", pct=pct, speed=spd_str)
+                continue
 
-    opts: dict = {
-        **cookie, **node,
-        "format":                  _YTDLP_FMT_PREF,
-        "outtmpl":                 out_tmpl,
-        "download_ranges":         _ytdlp_range_func(None, [(start_s, end_s)]),
-        "force_keyframes_at_cuts": True,
-        "merge_output_format":     "mp4",
-        "progress_hooks":          [_hook],
-        "postprocessor_hooks":     [_pp_hook],
-        "quiet":                   True,
-        "no_warnings":             True,
-    }
-    if not _yt_dlp_verbose():
-        opts["logger"] = _YtdlpQuietLogger()
+            # Post-processing interne (fusion vidéo+audio, keyframes)
+            if any(tok in line for tok in ("[Merger]", "[ffmpeg]", "[VideoConvertor]")):
+                update_job(job_id, phase="downloading", pct=99, speed="Finalisation…")
 
-    # Vérifier annulation avant de lancer
-    state = get_job(job_id)
-    if state and state.get("phase") == "cancelled":
-        raise RuntimeError("Job annulé")
+    finally:
+        proc.wait()
 
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        ydl.download([url])
+    if proc.returncode != 0:
+        err_tail = "".join(_buf[-30:])[-600:]
+        raise RuntimeError(f"yt-dlp a échoué (code {proc.returncode}) :\n{err_tail}")
 
-    # yt-dlp remplace %(ext)s → chercher le fichier produit
     candidates = [
         p for p in DOWNLOADS_DIR.glob(f"{job_id}_raw.*")
         if p.suffix not in (".part", ".ytdl", ".json", ".tmp")
@@ -730,9 +727,16 @@ def cancel_job(job_id):
     state = get_job(job_id)
     if not state:
         return jsonify({"error": "Job introuvable."}), 404
-    if state.get("phase") not in ("extracting", "encoding", "starting"):
+    if state.get("phase") not in ("extracting", "downloading", "encoding", "starting"):
         return jsonify({"error": "Job non annulable dans cet état."}), 400
     update_job(job_id, phase="cancelled")
+    # Tuer immédiatement le groupe de processus yt-dlp (inclut ses ffmpeg enfants)
+    pgid = state.get("_ytdlp_pgid")
+    if pgid:
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except (ProcessLookupError, OSError):
+            pass
     return jsonify({"ok": True})
 
 
