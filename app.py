@@ -238,38 +238,84 @@ def _ytdlp_download_section(url: str, start_s: float, end_s: float, job_id: str)
     node   = _yt_dlp_node_opts()
     out_tmpl = str(DOWNLOADS_DIR / f"{job_id}_raw.%(ext)s")
 
-    # Suivi de progression : yt-dlp peut télécharger plusieurs flux (vidéo + audio)
-    # en parallèle, on cumule les bytes pour une barre de progression globale.
-    _totals: dict = {}
-    _dones:  dict = {}
+    # Suivi de progression multi-flux (vidéo + audio téléchargés séparément).
+    # Stratégie : fragments en priorité (YouTube DASH), bytes en fallback.
+    _totals:     dict = {}   # key → total_bytes
+    _dones:      dict = {}   # key → downloaded_bytes
+    _frag_idx:   dict = {}   # key → fragment_index courant
+    _frag_count: dict = {}   # key → fragment_count total
+    _n_streams   = [0]       # nombre de flux détectés (liste pour closure mutable)
 
     def _hook(d: dict):
-        key = d.get("info_dict", {}).get("format_id", d.get("filename", ""))
+        key = d.get("info_dict", {}).get("format_id") or d.get("filename") or "stream"
+
         if d["status"] == "downloading":
+            _n_streams[0] = max(_n_streams[0], len({key, *_dones.keys()}))
+
+            # Fragments (DASH/HLS) : méthode la plus fiable pour YouTube
+            fi = d.get("fragment_index") or 0
+            fc = d.get("fragment_count") or 0
+            if fc > 0:
+                _frag_idx[key]   = fi
+                _frag_count[key] = fc
+
+            # Bytes : fallback quand fragment_count non disponible
             tb = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
             db = d.get("downloaded_bytes") or 0
             if tb:
                 _totals[key] = tb
             _dones[key] = db
-            total = sum(_totals.values()) or 1
-            done  = sum(_dones.values())
-            pct   = min(99, int(done / total * 100))
-            spd   = d.get("speed") or 0
+
+            # Calcul du pourcentage : préférer fragments, sinon bytes
+            total_frags = sum(_frag_count.values())
+            if total_frags > 0:
+                done_frags = sum(_frag_idx.values())
+                pct = min(99, int(done_frags / total_frags * 100))
+            else:
+                total_b = sum(_totals.values()) or 0
+                done_b  = sum(_dones.values())
+                pct = min(99, int(done_b / total_b * 100)) if total_b > 0 else 0
+
+            spd = d.get("speed") or 0
             spd_str = f"{spd / 1_048_576:.1f} MB/s" if spd else ""
             update_job(job_id, phase="downloading", pct=pct, speed=spd_str)
+
+        elif d["status"] == "finished":
+            # Un flux terminé : recalcul pour marquer sa contribution à 100%
+            if key in _frag_count:
+                _frag_idx[key] = _frag_count[key]
+            elif key in _totals:
+                _dones[key] = _totals[key]
+            total_frags = sum(_frag_count.values())
+            if total_frags > 0:
+                pct = min(99, int(sum(_frag_idx.values()) / total_frags * 100))
+            else:
+                total_b = sum(_totals.values()) or 0
+                pct = min(99, int(sum(_dones.values()) / total_b * 100)) if total_b > 0 else 0
+            update_job(job_id, phase="downloading", pct=pct, speed="")
+
         elif d["status"] == "error":
             update_job(job_id, phase="downloading", pct=0, speed="")
 
+    # postprocessor_hooks : couvre la phase ffmpeg interne de yt-dlp
+    # (force_keyframes_at_cuts, fusion vidéo+audio) invisible dans progress_hooks
+    def _pp_hook(d: dict):
+        if d.get("status") == "started":
+            update_job(job_id, phase="downloading", pct=99, speed="Finalisation…")
+        elif d.get("status") == "finished":
+            update_job(job_id, phase="downloading", pct=99, speed="")
+
     opts: dict = {
         **cookie, **node,
-        "format":                _YTDLP_FMT_PREF,
-        "outtmpl":               out_tmpl,
-        "download_ranges":       _ytdlp_range_func(None, [(start_s, end_s)]),
+        "format":                  _YTDLP_FMT_PREF,
+        "outtmpl":                 out_tmpl,
+        "download_ranges":         _ytdlp_range_func(None, [(start_s, end_s)]),
         "force_keyframes_at_cuts": True,
-        "merge_output_format":   "mp4",
-        "progress_hooks":        [_hook],
-        "quiet":                 True,
-        "no_warnings":           True,
+        "merge_output_format":     "mp4",
+        "progress_hooks":          [_hook],
+        "postprocessor_hooks":     [_pp_hook],
+        "quiet":                   True,
+        "no_warnings":             True,
     }
     if not _yt_dlp_verbose():
         opts["logger"] = _YtdlpQuietLogger()
