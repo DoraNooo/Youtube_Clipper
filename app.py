@@ -50,10 +50,11 @@ def _yt_dlp_node_opts() -> dict:
 
     Utile quand gunicorn/systemd n'hérite pas du même PATH que le shell.
     Ex. VPS : YT_DLP_NODE_PATH=/usr/bin/node
+    Format attendu par yt-dlp : js_runtimes = {'node': {'path': '...'}}
     """
     node = os.environ.get("YT_DLP_NODE_PATH", "").strip()
     if node and Path(node).is_file():
-        return {"js_runtimes": [f"node:{node}"]}
+        return {"js_runtimes": {"node": {"path": node}}}
     return {}
 
 
