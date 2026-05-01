@@ -45,6 +45,18 @@ def _yt_dlp_verbose() -> bool:
     return os.environ.get("YT_DLP_VERBOSE", "").strip().lower() in ("1", "true", "yes")
 
 
+def _yt_dlp_node_opts() -> dict:
+    """Chemin explicite vers node pour résoudre les n-challenges YouTube.
+
+    Utile quand gunicorn/systemd n'hérite pas du même PATH que le shell.
+    Ex. VPS : YT_DLP_NODE_PATH=/usr/bin/node
+    """
+    node = os.environ.get("YT_DLP_NODE_PATH", "").strip()
+    if node and Path(node).is_file():
+        return {"js_runtimes": [f"node:{node}"]}
+    return {}
+
+
 class _YtdlpQuietLogger:
     """Évite un flux d’ERROR dans journalctl entre chaque tentative yt-dlp."""
 
@@ -142,63 +154,36 @@ _YTDLP_FMT_PREF = (
 
 
 def _youtube_extract_info(url: str) -> dict:
-    """Extraction yt-dlp avec plusieurs stratégies.
+    """Extraction yt-dlp avec replis progressifs.
 
-    Sur VPS (cookies, métadonnées incomplètes, client « web » seul), la chaîne avec filtres
-    height/width peut ne matcher aucun format ; on ajoute des sélecteurs plus larges et des
-    player_client alternatifs (android_embedded, etc.).
+    Avec Node + bgutil PO Token + cookies, la premiere tentative reussit en general.
+    Les replis couvrent les cas degrades (format manquant, metadonnee absente).
 
-    Sans fichier cookies, une IP datacenter déclenche souvent « Sign in… » : les cookies sont
-    alors nécessaires. Si des cookies sont configurés, les tentatives sans cookie sont désactivées
-    par défaut (elles ne font qu’empiler des erreurs bot). Pour les réactiver : YT_DLP_TRY_WITHOUT_COOKIES=1.
-
-    Logs yt-dlp détaillés : YT_DLP_VERBOSE=1.
+    Variables d'environnement :
+      YT_DLP_COOKIES_FILE   chemin vers le fichier cookies Netscape
+      YT_DLP_NODE_PATH      chemin absolu vers node (ex. /usr/bin/node)
+      YT_DLP_VERBOSE        1/true -> logs yt-dlp complets dans journalctl
     """
     cookie = _yt_dlp_cookie_opts()
-    common: dict = {"quiet": True, "no_warnings": True}
+    node   = _yt_dlp_node_opts()
+    common: dict = {"quiet": True, "no_warnings": True, **cookie, **node}
     if not _yt_dlp_verbose():
         common["logger"] = _YtdlpQuietLogger()
 
-    bases: list[dict] = [{**common, **cookie}]
-    if cookie and os.environ.get("YT_DLP_TRY_WITHOUT_COOKIES", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    ):
-        bases.append({**common})
-
-    # (format string, extractor_args fusionné dans opts ; {} = défaut yt-dlp)
     specs: list[tuple[str, dict]] = [
         (_YTDLP_FMT_PREF, {}),
-        (_YTDLP_FMT_PREF, {"extractor_args": {"youtube": {"player_client": ["android_creator"]}}}),
-        (_YTDLP_FMT_PREF, {"extractor_args": {"youtube": {"player_client": ["android_embedded"]}}}),
-        (_YTDLP_FMT_PREF, {"extractor_args": {"youtube": {"player_client": ["tv_embedded"]}}}),
-        # Sans filtres height/width (évite « Requested format » si métadonnées absentes)
         ("bestvideo+bestaudio/best", {}),
-        (
-            "bestvideo+bestaudio/best",
-            {"extractor_args": {"youtube": {"player_client": ["android_creator"]}}},
-        ),
-        (
-            "bestvideo+bestaudio/best",
-            {"extractor_args": {"youtube": {"player_client": ["android_embedded"]}}},
-        ),
-        ("bv*+ba/b", {"extractor_args": {"youtube": {"player_client": ["android_creator"]}}}),
-        ("bv*+ba/b", {"extractor_args": {"youtube": {"player_client": ["android_embedded"]}}}),
-        ("best", {"extractor_args": {"youtube": {"player_client": ["android"]}}}),
-        ("bestvideo+bestaudio/best", {"extractor_args": {"youtube": {"player_client": ["tv_embedded"]}}}),
         ("best", {}),
     ]
 
     last_exc: Exception | None = None
-    for base in bases:
-        for fmt, extra in specs:
-            opts = {**base, "format": fmt, **extra}
-            try:
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    return ydl.extract_info(url, download=False)
-            except Exception as exc:
-                last_exc = exc
+    for fmt, extra in specs:
+        opts = {**common, "format": fmt, **extra}
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                return ydl.extract_info(url, download=False)
+        except Exception as exc:
+            last_exc = exc
     raise last_exc if last_exc else RuntimeError("_youtube_extract_info: aucune tentative")
 
 
