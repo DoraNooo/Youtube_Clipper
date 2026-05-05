@@ -559,7 +559,8 @@ def _ytdlp_download_full(url: str, job_id: str, fmt: str = "best") -> Path:
         "--format", fmt,
         "--merge-output-format", "mp4",
         "--concurrent-fragments", "4",
-        "--extractor-args", "youtube:player_client=android,web",
+        # Pas de player_client=android ici : le client web expose tous les formats
+        # (4K, VP9, AV1…). Android est limité à ~720p selon la vidéo.
         "--output", out_tmpl,
         "--progress",
         "--newline",
