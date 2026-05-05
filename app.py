@@ -245,6 +245,8 @@ def _ytdlp_download_section(url: str, start_s: float, end_s: float, job_id: str)
         "--format", _YTDLP_FMT_PREF,
         "--merge-output-format", "mp4",
         "--concurrent-fragments", "4",
+        # Client Android : moins throttlé par YouTube que le client web
+        "--extractor-args", "youtube:player_client=android,web",
         "--output", out_tmpl,
         "--progress",
         "--newline",
@@ -531,6 +533,138 @@ def run_clip_job(job_id: str, url: str, start_s: float, end_s: float | None, cli
         stderr_file.unlink(missing_ok=True)
         if raw_path:
             raw_path.unlink(missing_ok=True)
+
+
+def _ytdlp_download_full(url: str, job_id: str) -> Path:
+    """Télécharge la vidéo complète via yt-dlp subprocess.
+
+    Même architecture que _ytdlp_download_section mais sans --download-sections.
+    Sans restriction de plage, yt-dlp télécharge en pleine vitesse (pas de throttling
+    fragment par fragment), surtout avec le client Android.
+    """
+    out_tmpl = str(DOWNLOADS_DIR / f"{job_id}_full.%(ext)s")
+    cookie   = _yt_dlp_cookie_opts()
+
+    cmd = [
+        sys.executable, "-m", "yt_dlp",
+        "--format", _YTDLP_FMT_PREF,
+        "--merge-output-format", "mp4",
+        "--concurrent-fragments", "4",
+        "--extractor-args", "youtube:player_client=android,web",
+        "--output", out_tmpl,
+        "--progress",
+        "--newline",
+        "--no-warnings",
+    ]
+    if shutil.which("aria2c"):
+        cmd += [
+            "--downloader", "aria2c",
+            "--downloader-args", "aria2c:-x 8 -s 8 -k 2M --file-allocation=none",
+        ]
+    if cookie.get("cookiefile"):
+        cmd += ["--cookies", cookie["cookiefile"]]
+    if _yt_dlp_verbose():
+        cmd.append("--verbose")
+    cmd.append(url)
+
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        preexec_fn=os.setsid,
+    )
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (OSError, ProcessLookupError):
+        pgid = None
+    update_job(job_id, _ytdlp_pgid=pgid)
+
+    _stream_idx = [0]
+    _last_pct   = [0.0]
+    _buf: list  = []
+
+    def _kill_proc():
+        if pgid:
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                pass
+        proc.wait()
+
+    try:
+        for line in proc.stdout:
+            _buf.append(line)
+            state = get_job(job_id)
+            if state and state.get("phase") == "cancelled":
+                _kill_proc()
+                raise RuntimeError("Job annulé")
+
+            m = re.search(r'\[download\]\s+(\d+(?:\.\d+)?)%', line)
+            if m:
+                raw = float(m.group(1))
+                if _last_pct[0] > 50.0 and raw < 10.0:
+                    _stream_idx[0] = min(_stream_idx[0] + 1, 1)
+                _last_pct[0] = raw
+                chunk  = 49.0
+                offset = _stream_idx[0] * chunk
+                pct    = min(98, int(offset + raw / 100 * chunk))
+                spd_m  = re.search(r'at\s+(\S+(?:Ki|Mi|Gi)?B/s)', line)
+                update_job(job_id, phase="downloading", pct=pct,
+                           speed=spd_m.group(1) if spd_m else "")
+                continue
+            if any(tok in line for tok in ("[Merger]", "[ffmpeg]", "[VideoConvertor]")):
+                update_job(job_id, phase="downloading", pct=99, speed="Finalisation…")
+    finally:
+        proc.wait()
+
+    if proc.returncode != 0:
+        err_tail = "".join(_buf[-30:])[-600:]
+        raise RuntimeError(f"yt-dlp a échoué (code {proc.returncode}) :\n{err_tail}")
+
+    candidates = [
+        p for p in DOWNLOADS_DIR.glob(f"{job_id}_full.*")
+        if p.suffix not in (".part", ".ytdl", ".json", ".tmp")
+    ]
+    if not candidates:
+        raise RuntimeError("yt-dlp n'a produit aucun fichier de sortie.")
+    mp4_files = [p for p in candidates if p.suffix == ".mp4"]
+    return mp4_files[0] if mp4_files else candidates[0]
+
+
+def run_full_download_job(job_id: str, url: str):
+    """Job background : télécharge la vidéo complète (pas d'encodage)."""
+    update_job(job_id, phase="extracting")
+    try:
+        info = _youtube_extract_info(url)
+    except Exception as e:
+        msg  = f"Erreur YouTube : {e}"
+        hint = _youtube_failure_hint(e)
+        update_job(job_id, phase="error", error=f"{msg} — {hint}" if hint else msg)
+        return
+
+    raw_title = info.get("title") or "video"
+    update_job(job_id, video_title=sanitize_filename(raw_title))
+
+    update_job(job_id, phase="downloading", pct=0, speed="")
+    full_path: Path | None = None
+    try:
+        full_path = _ytdlp_download_full(url, job_id)
+    except Exception as e:
+        current = get_job(job_id)
+        if current and current.get("phase") == "cancelled":
+            return
+        update_job(job_id, phase="error", error=f"Erreur téléchargement : {e}")
+        return
+
+    current = get_job(job_id)
+    if current and current.get("phase") == "cancelled":
+        if full_path:
+            full_path.unlink(missing_ok=True)
+        return
+
+    update_job(job_id, phase="done", pct=100, full_path=str(full_path))
 
 
 def _autosave_to_library(job_id: str, clip_path: Path, info: dict, duration: float):
@@ -891,6 +1025,57 @@ def merge():
     except Exception as exc:
         shutil.rmtree(merge_dir, ignore_errors=True)
         return jsonify({"error": str(exc)}), 500
+
+
+# ── Téléchargement vidéo complète ────────────────────────────────────────────
+
+@app.route("/full-download", methods=["POST"])
+def full_download_start():
+    data = request.get_json() or {}
+    url  = (data.get("url") or "").strip()
+    if not url:
+        return jsonify({"error": "URL manquante."}), 400
+    if not is_valid_youtube_url(url):
+        return jsonify({"error": "URL YouTube invalide."}), 400
+
+    job_id = uuid.uuid4().hex
+    update_job(job_id, phase="starting")
+    threading.Thread(target=run_full_download_job, args=(job_id, url), daemon=True).start()
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/full-download/progress/<job_id>")
+def full_download_progress(job_id):
+    if not re.match(r"^[a-f0-9]{32}$", job_id):
+        return "Invalid", 400
+
+    def generate():
+        while True:
+            state = get_job(job_id)
+            if state:
+                yield f"data: {json.dumps({k: v for k, v in state.items() if not k.startswith('_')})}\n\n"
+                if state.get("phase") in ("done", "error", "cancelled"):
+                    break
+            time.sleep(0.5)
+
+    return Response(stream_with_context(generate()),
+                    mimetype="text/event-stream",
+                    headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
+
+
+@app.route("/full-download/file/<job_id>")
+def full_download_file(job_id):
+    if not re.match(r"^[a-f0-9]{32}$", job_id):
+        return jsonify({"error": "ID invalide."}), 400
+    state = get_job(job_id)
+    if not state or state.get("phase") != "done":
+        return jsonify({"error": "Fichier non prêt."}), 404
+    full_path = Path(state.get("full_path", ""))
+    if not full_path.exists():
+        return jsonify({"error": "Fichier introuvable."}), 404
+    custom = request.args.get("filename", "").strip()
+    name   = (sanitize_filename(custom) + ".mp4") if custom else "video.mp4"
+    return send_file(full_path, mimetype="video/mp4", as_attachment=True, download_name=name)
 
 
 # ── Sous-titres ───────────────────────────────────────────────────────────────

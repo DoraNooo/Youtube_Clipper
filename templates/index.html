@@ -324,6 +324,24 @@
     #saveLibBtn:hover:not(:disabled) { opacity: .88; }
     #saveLibBtn:disabled { opacity: .45; cursor: not-allowed; }
 
+    /* ── Toggle vidéo complète ── */
+    .full-toggle {
+      display: flex; align-items: center; gap: 10px;
+      margin: 14px 0 0; padding: 12px 14px;
+      background: #0d0d14; border: 1px solid #2a2a42;
+      border-radius: 12px; cursor: pointer; user-select: none;
+      transition: border-color .2s;
+    }
+    .full-toggle:hover { border-color: #5a5aff; }
+    .full-toggle input[type=checkbox] { width: 16px; height: 16px; accent-color: #5a8fff; cursor: pointer; }
+    .full-toggle-label { font-size: .88rem; color: #c0c0d8; flex: 1; }
+    .full-toggle-label strong { color: #fff; }
+    .full-toggle-badge {
+      font-size: .72rem; padding: 2px 8px;
+      background: #1a2a4a; color: #5a8fff;
+      border-radius: 20px; font-weight: 600;
+    }
+
     /* ── Sous-titres ── */
     #subBtn {
       width: 100%; margin-top: 10px; padding: 12px;
@@ -462,7 +480,16 @@
   </div>
   <p class="hint" id="mainHint">Format : MM:SS, HH:MM:SS ou secondes.</p>
 
-  <button id="clipBtn" onclick="startClip()">Générer le clip</button>
+  <label class="full-toggle" for="fullVideoCheck">
+    <input type="checkbox" id="fullVideoCheck" onchange="onFullVideoToggle()" />
+    <span class="full-toggle-label">
+      <strong>Télécharger la vidéo entière</strong>
+      <span style="color:#666;font-size:.82rem;display:block;margin-top:2px">Ignore les timecodes — télécharge la vidéo complète en MP4</span>
+    </span>
+    <span class="full-toggle-badge">+ rapide</span>
+  </label>
+
+  <button id="clipBtn" onclick="startAction()">Générer le clip</button>
 
   <!-- Progress -->
   <div id="progressSection">
@@ -898,6 +925,13 @@ function resetProgress() {
   document.getElementById('errorBox').style.display = 'none';
   document.getElementById('filenameWrap').style.display = 'none';
   document.getElementById('progressSection').style.display = 'block';
+  // Restaurer les phases masquées par le mode vidéo complète
+  ['ph3','ph4','con2','con3'].forEach(id => {
+    document.getElementById(id).style.display = '';
+  });
+  document.getElementById('downloadBtn').textContent = '⬇ Télécharger';
+  document.getElementById('downloadBtn').onclick = downloadClip;
+  document.getElementById('saveLibBtn').style.display = '';
   document.getElementById('cancelBtn').style.display = 'none';
   document.getElementById('cancelBtn').disabled = false;
   document.getElementById('cancelBtn').textContent = '✕ Annuler';
@@ -1020,6 +1054,133 @@ async function cancelClip() {
   } catch(e) {
     // Le serveur traitera l'annulation de toute façon
   }
+}
+
+function onFullVideoToggle() {
+  const full = document.getElementById('fullVideoCheck').checked;
+  document.getElementById('clipBtn').textContent = full ? '⬇ Télécharger la vidéo' : 'Générer le clip';
+  // Griser les timecodes quand vidéo complète est coché
+  ['startInput','endInput','slStart','slEnd','previewBtn'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = full;
+  });
+  document.getElementById('playerSection').style.opacity = full ? '.4' : '1';
+}
+
+function startAction() {
+  if (document.getElementById('fullVideoCheck').checked) {
+    startFullDownload();
+  } else {
+    startClip();
+  }
+}
+
+async function startFullDownload() {
+  const url = document.getElementById('urlInput').value.trim();
+  if (!url) { alert('Merci de renseigner l\'URL YouTube.'); return; }
+
+  if (evtSource) { evtSource.close(); evtSource = null; }
+  currentJobId = null;
+  document.getElementById('clipBtn').disabled = true;
+  resetProgress();
+  // Mode vidéo complète : pas de phase encodage, seulement Analyse + Téléchargement + Prêt
+  document.getElementById('ph3').style.display = 'none';
+  document.getElementById('con2').style.display = 'none';
+  document.getElementById('ph4').style.display = 'none';
+  document.getElementById('con3').style.display = 'none';
+
+  let data;
+  try {
+    const res = await fetch('/full-download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    data = await res.json();
+  } catch(e) {
+    document.getElementById('progressSection').style.display = 'none';
+    document.getElementById('errorBox').style.display = 'block';
+    document.getElementById('errorBox').textContent = 'Erreur réseau : ' + e.message;
+    document.getElementById('clipBtn').disabled = false;
+    return;
+  }
+
+  if (data.error) {
+    document.getElementById('progressSection').style.display = 'none';
+    document.getElementById('errorBox').style.display = 'block';
+    document.getElementById('errorBox').textContent = data.error;
+    document.getElementById('clipBtn').disabled = false;
+    return;
+  }
+
+  currentJobId = data.job_id;
+  evtSource = new EventSource(`/full-download/progress/${currentJobId}`);
+  evtSource.onmessage = e => handleFullState(JSON.parse(e.data));
+  evtSource.onerror = () => {
+    document.getElementById('errorBox').style.display = 'block';
+    document.getElementById('errorBox').textContent = 'Connexion perdue avec le serveur.';
+    document.getElementById('clipBtn').disabled = false;
+    evtSource.close(); evtSource = null;
+  };
+}
+
+function handleFullState(state) {
+  const { phase } = state;
+  if (phase === 'starting' || phase === 'extracting') {
+    setPhaseActive(1);
+    document.getElementById('statusText').textContent = 'Analyse de la vidéo YouTube…';
+    document.getElementById('cancelBtn').style.display = 'inline-block';
+  } else if (phase === 'downloading') {
+    setPhaseActive(2);
+    const pct = state.pct || 0;
+    document.getElementById('barWrap').style.display = 'block';
+    document.getElementById('barFill').style.width = pct + '%';
+    document.getElementById('barPct').textContent = pct + '%';
+    document.getElementById('barStats').textContent = state.speed ? `⬇ ${state.speed}` : '';
+    document.getElementById('statusText').textContent = 'Téléchargement de la vidéo…';
+    document.getElementById('cancelBtn').style.display = 'inline-block';
+  } else if (phase === 'done') {
+    // En mode vidéo complète on saute directement à "Prêt"
+    document.getElementById('cancelBtn').style.display = 'none';
+    document.getElementById('barFill').style.width = '100%';
+    document.getElementById('barFill').style.background = 'linear-gradient(90deg, #1a5a30, #2ecc71)';
+    document.getElementById('barPct').textContent = '100%';
+    document.getElementById('barStats').textContent = 'Terminé !';
+    document.getElementById('statusText').textContent = 'Vidéo prête — cliquez pour télécharger.';
+    if (state.video_title) document.getElementById('filenameInput').value = state.video_title;
+    // Afficher le bloc téléchargement avec un bouton dédié
+    document.getElementById('filenameWrap').style.display = 'block';
+    document.getElementById('downloadBtn').textContent = '⬇ Télécharger la vidéo';
+    document.getElementById('downloadBtn').onclick = downloadFullVideo;
+    document.getElementById('saveLibBtn').style.display = 'none';
+    document.getElementById('subBtn').style.display = 'none';
+    document.getElementById('clipBtn').disabled = false;
+    if (evtSource) { evtSource.close(); evtSource = null; }
+  } else if (phase === 'cancelled') {
+    document.getElementById('cancelBtn').style.display = 'none';
+    document.getElementById('progressSection').style.display = 'none';
+    document.getElementById('errorBox').style.display = 'block';
+    document.getElementById('errorBox').textContent = 'Téléchargement annulé.';
+    document.getElementById('clipBtn').disabled = false;
+    if (evtSource) { evtSource.close(); evtSource = null; }
+  } else if (phase === 'error') {
+    document.getElementById('cancelBtn').style.display = 'none';
+    document.getElementById('progressSection').style.display = 'none';
+    document.getElementById('errorBox').style.display = 'block';
+    document.getElementById('errorBox').textContent = state.error || 'Erreur.';
+    document.getElementById('clipBtn').disabled = false;
+    if (evtSource) { evtSource.close(); evtSource = null; }
+  }
+}
+
+function downloadFullVideo() {
+  if (!currentJobId) return;
+  const rawName = document.getElementById('filenameInput').value.trim();
+  const qs = rawName ? `?filename=${encodeURIComponent(rawName)}` : '';
+  const a = document.createElement('a');
+  a.href = `/full-download/file/${currentJobId}${qs}`;
+  a.download = (rawName || 'video') + '.mp4';
+  a.click();
 }
 
 async function startClip() {
