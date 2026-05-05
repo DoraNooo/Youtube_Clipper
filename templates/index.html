@@ -488,6 +488,16 @@
     </span>
     <span class="full-toggle-badge">+ rapide</span>
   </label>
+  <div id="fullQualityWrap" style="display:none;margin-top:10px;display:none">
+    <label style="font-size:.78rem;color:#666;display:block;margin-bottom:6px">Qualité</label>
+    <select id="fullQuality" style="width:100%;background:#111118;border:1px solid #2a2a40;border-radius:8px;padding:9px 12px;color:#e0e0e8;font-size:.88rem;cursor:pointer">
+      <option value="best">Meilleure disponible (recommandé)</option>
+      <option value="1080p">1080p Full HD</option>
+      <option value="720p">720p HD</option>
+      <option value="480p">480p SD</option>
+      <option value="360p">360p</option>
+    </select>
+  </div>
 
   <button id="clipBtn" onclick="startAction()">Générer le clip</button>
 
@@ -932,6 +942,9 @@ function resetProgress() {
   document.getElementById('downloadBtn').textContent = '⬇ Télécharger';
   document.getElementById('downloadBtn').onclick = downloadClip;
   document.getElementById('saveLibBtn').style.display = '';
+  if (!document.getElementById('fullVideoCheck').checked) {
+    document.getElementById('fullQualityWrap').style.display = 'none';
+  }
   document.getElementById('cancelBtn').style.display = 'none';
   document.getElementById('cancelBtn').disabled = false;
   document.getElementById('cancelBtn').textContent = '✕ Annuler';
@@ -1059,7 +1072,7 @@ async function cancelClip() {
 function onFullVideoToggle() {
   const full = document.getElementById('fullVideoCheck').checked;
   document.getElementById('clipBtn').textContent = full ? '⬇ Télécharger la vidéo' : 'Générer le clip';
-  // Griser les timecodes quand vidéo complète est coché
+  document.getElementById('fullQualityWrap').style.display = full ? 'block' : 'none';
   ['startInput','endInput','slStart','slEnd','previewBtn'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.disabled = full;
@@ -1094,7 +1107,10 @@ async function startFullDownload() {
     const res = await fetch('/full-download', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url }),
+      body: JSON.stringify({
+        url,
+        quality: document.getElementById('fullQuality').value,
+      }),
     });
     data = await res.json();
   } catch(e) {

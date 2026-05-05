@@ -535,7 +535,16 @@ def run_clip_job(job_id: str, url: str, start_s: float, end_s: float | None, cli
             raw_path.unlink(missing_ok=True)
 
 
-def _ytdlp_download_full(url: str, job_id: str) -> Path:
+_FULL_FMT: dict = {
+    "best":  "bestvideo+bestaudio/best",
+    "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+    "720p":  "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+    "480p":  "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
+    "360p":  "bestvideo[height<=360]+bestaudio/best[height<=360]/best",
+}
+
+
+def _ytdlp_download_full(url: str, job_id: str, fmt: str = "best") -> Path:
     """Télécharge la vidéo complète via yt-dlp subprocess.
 
     Même architecture que _ytdlp_download_section mais sans --download-sections.
@@ -547,7 +556,7 @@ def _ytdlp_download_full(url: str, job_id: str) -> Path:
 
     cmd = [
         sys.executable, "-m", "yt_dlp",
-        "--format", _YTDLP_FMT_PREF,
+        "--format", fmt,
         "--merge-output-format", "mp4",
         "--concurrent-fragments", "4",
         "--extractor-args", "youtube:player_client=android,web",
@@ -633,8 +642,9 @@ def _ytdlp_download_full(url: str, job_id: str) -> Path:
     return mp4_files[0] if mp4_files else candidates[0]
 
 
-def run_full_download_job(job_id: str, url: str):
+def run_full_download_job(job_id: str, url: str, quality: str = "best"):
     """Job background : télécharge la vidéo complète (pas d'encodage)."""
+    fmt = _FULL_FMT.get(quality, _FULL_FMT["best"])
     update_job(job_id, phase="extracting")
     try:
         info = _youtube_extract_info(url)
@@ -650,7 +660,7 @@ def run_full_download_job(job_id: str, url: str):
     update_job(job_id, phase="downloading", pct=0, speed="")
     full_path: Path | None = None
     try:
-        full_path = _ytdlp_download_full(url, job_id)
+        full_path = _ytdlp_download_full(url, job_id, fmt=fmt)
     except Exception as e:
         current = get_job(job_id)
         if current and current.get("phase") == "cancelled":
@@ -1038,9 +1048,13 @@ def full_download_start():
     if not is_valid_youtube_url(url):
         return jsonify({"error": "URL YouTube invalide."}), 400
 
+    quality = (data.get("quality") or "best").strip()
+    if quality not in _FULL_FMT:
+        quality = "best"
+
     job_id = uuid.uuid4().hex
     update_job(job_id, phase="starting")
-    threading.Thread(target=run_full_download_job, args=(job_id, url), daemon=True).start()
+    threading.Thread(target=run_full_download_job, args=(job_id, url, quality), daemon=True).start()
     return jsonify({"job_id": job_id})
 
 
